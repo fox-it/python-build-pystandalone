@@ -107,6 +107,7 @@ def should_include_entry(entry: dict[str, str], filters: dict[str, set[str]]) ->
 def generate_docker_matrix_entries(
     runners: dict[str, Any],
     platform_filter: str | None = None,
+    free_runners: bool = False,
 ) -> list[dict[str, str]]:
     """Generate matrix entries for docker image builds."""
     if platform_filter and platform_filter != "linux":
@@ -115,7 +116,7 @@ def generate_docker_matrix_entries(
     matrix_entries = []
     for image in DOCKER_BUILD_IMAGES:
         # Find appropriate runner for Linux platform with the specified architecture
-        runner = find_runner(runners, "linux", image["arch"], False)
+        runner = find_runner(runners, "linux", image["arch"], free_runners)
 
         entry = {
             "name": image["name"],
@@ -133,6 +134,7 @@ def generate_crate_build_matrix_entries(
     config: dict[str, Any],
     force_crate_build: bool = False,
     platform_filter: str | None = None,
+    free_runners: bool = False,
 ) -> list[dict[str, str]]:
     """Generate matrix entries for crate builds based on python build matrix."""
     needed_builds = set()
@@ -165,9 +167,7 @@ def generate_crate_build_matrix_entries(
             # missing a Rust toolchain. On Linux, it's important that the the
             # `python-build` runner matches the `crate-build` runner because of
             # GLIBC version mismatches.
-            "runner": find_runner(
-                runners, platform, arch, True if platform == "windows" else False
-            ),
+            "runner": find_runner(runners, platform, arch, free_runners),
             "crate_artifact_name": crate_artifact_name(
                 platform,
                 arch,
@@ -183,6 +183,7 @@ def generate_python_build_matrix_entries(
     runners: dict[str, Any],
     platform_filter: str | None = None,
     label_filters: dict[str, set[str]] | None = None,
+    free_runners: bool = False,
 ) -> list[dict[str, str]]:
     """Generate matrix entries for python builds."""
     matrix_entries = []
@@ -199,6 +200,7 @@ def generate_python_build_matrix_entries(
                 platform,
                 runners,
                 label_filters.get("directives", set()) if label_filters else set(),
+                free_runners,
             )
 
     # Apply label filters if present
@@ -269,12 +271,13 @@ def add_python_build_entries_for_config(
     platform: str,
     runners: dict[str, Any],
     directives: set[str],
+    free_runners: bool = False,
 ) -> None:
     """Add python build matrix entries for a specific target configuration."""
     python_versions = config["python_versions"]
     build_options = config["build_options"]
     arch = config["arch"]
-    runner = find_runner(runners, platform, arch, False)
+    runner = find_runner(runners, platform, arch, free_runners)
 
     # Create base entry that will be used for all variants
     base_entry = {
@@ -388,6 +391,7 @@ def main() -> None:
         runners,
         args.platform,
         labels,
+        args.free_runners,
     )
 
     # Output python-build matrix if requested
@@ -429,6 +433,7 @@ def main() -> None:
             docker_entries = generate_docker_matrix_entries(
                 runners,
                 args.platform,
+                args.free_runners,
             )
             result["docker-build"] = {"include": docker_entries}
 
@@ -440,6 +445,7 @@ def main() -> None:
             config,
             args.force_crate_build,
             args.platform,
+            args.free_runners,
         )
         result["crate-build"] = {"include": crate_entries}
 

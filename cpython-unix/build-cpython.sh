@@ -58,6 +58,13 @@ cat Makefile.extra
 
 pushd "Python-${PYTHON_VERSION}"
 
+# PYSTANDALONE: extract pystandalone tar, copy source and apply patches
+tar -xf ${ROOT}/pystandalone.tar -C ${ROOT}
+cp -a ${ROOT}/pystandalone/src/. .
+for file in ${ROOT}/pystandalone/patch/*.patch; do
+    patch -p1 -i $file
+done
+
 # configure doesn't support cross-compiling on Apple. Teach it.
 if [[ "${PYBUILD_PLATFORM}" = macos* && -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_13}" ]]; then
     if [ "${PYTHON_MAJMIN_VERSION}" = "3.12" ]; then
@@ -151,15 +158,7 @@ fi
 # linked modules. But those libraries should only get linked into libpython, not the
 # executable. This behavior is kinda suspect on all platforms, as it could be adding
 # library dependencies that shouldn't need to be there.
-if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
-    if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_15}" ]; then
-        patch -p1 -i "${ROOT}/patch-python-link-modules-3.15.patch"
-    elif [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_11}" ]; then
-        patch -p1 -i "${ROOT}/patch-python-link-modules-3.11.patch"
-    elif [ "${PYTHON_MAJMIN_VERSION}" = "3.10" ]; then
-        patch -p1 -i "${ROOT}/patch-python-link-modules-3.10.patch"
-    fi
-fi
+# PYSTANDALONE: skip this patch.
 
 # The macOS code for sniffing for _dyld_shared_cache_contains_path falls back on a
 # possibly inappropriate code path if a configure time check fails. This is not
@@ -347,7 +346,8 @@ if [[ "${PYBUILD_PLATFORM}" != macos* ]]; then
     LDFLAGS="${LDFLAGS} -Wl,--exclude-libs,ALL"
 fi
 
-EXTRA_CONFIGURE_FLAGS=
+# PYSTANDALONE: additional configure flags
+EXTRA_CONFIGURE_FLAGS="--without-doc-strings"
 
 if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
     CFLAGS="${CFLAGS} -I${TOOLS_PATH}/deps/include/uuid"
@@ -392,6 +392,15 @@ fi
 # so give it plenty of space.
 if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
     LDFLAGS="${LDFLAGS} -Wl,-headerpad,40"
+fi
+
+# PYSTANDALONE: move the static mapping to a different base offset that's rare.
+# This is useful for when we need to manually map an ELF, we need to avoid
+# address conflicts with the executable we're mapping from.
+# Also add a custom loading script to the default script to move our
+# our payload section to the end of the binary.
+if [[ "${PYBUILD_PLATFORM}" != macos* ]]; then
+    LDFLAGS="${LDFLAGS} -Wl,-Ttext-segment=0x1000000,-Tpystandalone.ld"
 fi
 
 CPPFLAGS=$CFLAGS
@@ -459,7 +468,10 @@ if [ -n "${CPYTHON_STATIC}" ]; then
     CFLAGS="${CFLAGS} -static"
     CPPFLAGS="${CPPFLAGS} -static"
     LDFLAGS="${LDFLAGS} -static"
-    PYBUILD_SHARED=0 
+    PYBUILD_SHARED=0
+elif [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
+    # PYSTANDALONE: hybrid static mode on macOS - don't build a shared libpython
+    PYBUILD_SHARED=0
 else
     CONFIGURE_FLAGS="${CONFIGURE_FLAGS} --enable-shared"
     PYBUILD_SHARED=1
@@ -588,6 +600,9 @@ fi
 if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" ]]; then
     PROFILE_TASK="${PROFILE_TASK} --ignore test_json"
 fi
+
+# PYSTANDALONE: ignore tests for modules we disabled
+PROFILE_TASK="${PROFILE_TASK} --ignore test_cmath test_decimal test_sqlite3 test_statistics"
 
 # ./configure tries to auto-detect whether it can build 128-bit and 256-bit SIMD helpers for HACL,
 # but on x86-64 that requires v2 and v3 respectively, and on arm64 the performance is bad as noted
@@ -719,6 +734,67 @@ CFLAGS=$CFLAGS CPPFLAGS=$CFLAGS CFLAGS_JIT=$CFLAGS_JIT LDFLAGS=$LDFLAGS \
     ./configure ${CONFIGURE_FLAGS}
 
 # Supplement produced Makefile with our modifications.
+cat ../Makefile.extra >> Makefile
+
+# PYSTANDALONE: do a silly dance to temporarily disable the _pystandalone module to avoid compilation issues during regen
+sed -E "${sed_args[@]}" 's/^(_pystandalone .+)/#\1/g' Modules/Setup.local
+rm Modules/config.c
+make -j "${NUM_CPUS}" Modules/config.c
+cat ../Makefile.extra >> Makefile
+
+# PYSTANDALONE: regenerate files (clinic, global objects, importlib because of changes to zipimport.py, etc.)
+make -j "${NUM_CPUS}" clinic
+if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_11}" ]; then
+    make -j "${NUM_CPUS}" regen-global-objects
+fi
+# PYSTANDALONE: regen frozen modules to include our zipimport.py changes
+if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_11}" ]; then
+    make -j "${NUM_CPUS}" regen-frozen
+else
+    # 3.10: regen-frozen doesn't exist yet. regen-importlib would use
+    # Programs/_freeze_importlib, compiled with $(CC). On musl targets this
+    # produces a dynamically-linked musl binary that can't run on the glibc
+    # build host ("Command not found" = missing ld-musl interpreter).
+    # Instead, use the pre-built host Python to do exactly what
+    # Programs/_freeze_importlib.c does: compile source -> marshal -> C header.
+    "${TOOLS_PATH}/host/bin/python${PYTHON_MAJMIN_VERSION}" - << EOF
+import marshal
+
+def freeze_module(name, inpath, outpath):
+    with open(inpath, "rb") as f:
+        text = f.read()
+    code = compile(text, f"<frozen {name}>", "exec", optimize=0, dont_inherit=True)
+    marshalled = marshal.dumps(code)
+    with open(outpath, "w") as f:
+        f.write("/* Auto-generated by Programs/_freeze_importlib.c */\n")
+        arrayname = name.replace(".", "")
+        f.write(f"unsigned char _Py_M__{arrayname}[] = {{\n")
+        for n in range(0, len(marshalled), 16):
+            f.write(f"    {', '.join(str(i) for i in marshalled[n : n + 16])},\n")
+        f.write("};\n")
+
+freeze_module(
+    "importlib._bootstrap_external",
+    "Lib/importlib/_bootstrap_external.py",
+    "Python/importlib_external.h",
+)
+freeze_module(
+    "importlib._bootstrap",
+    "Lib/importlib/_bootstrap.py",
+    "Python/importlib.h",
+)
+freeze_module(
+    "zipimport",
+    "Lib/zipimport.py",
+    "Python/importlib_zipimport.h",
+)
+EOF
+fi
+
+# PYSTANDALONE: re-enable the _pystandalone module
+sed -E "${sed_args[@]}" 's/^#(_pystandalone .+)/\1/g' Modules/Setup.local
+rm Modules/config.c
+make -j "${NUM_CPUS}" Modules/config.c
 cat ../Makefile.extra >> Makefile
 
 make -j "${NUM_CPUS}"
@@ -897,22 +973,7 @@ if [ "${PYBUILD_SHARED}" = "1" ]; then
     fi
 fi
 
-# Install setuptools and pip as they are common tools that should be in any
-# Python distribution.
-#
-# We disabled ensurepip because we insist on providing our own pip and don't
-# want the final product to possibly be contaminated by another version.
-#
-# It is possible for the Python interpreter to run wheels directly. So we
-# simply use our pip to install self. Kinda crazy, but it works!
-
-${BUILD_PYTHON} "${PIP_WHEEL}/pip" install --prefix="${ROOT}/out/python/install" --no-cache-dir --no-index "${PIP_WHEEL}"
-
-# Setuptools is only installed for Python 3.11 and older, for parity with
-# `ensurepip` and `venv`: https://github.com/python/cpython/pull/101039
-if [ -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_11}" ]; then
-    ${BUILD_PYTHON} "${PIP_WHEEL}/pip" install --prefix="${ROOT}/out/python/install" --no-cache-dir --no-index "${SETUPTOOLS_WHEEL}"
-fi
+# PYSTANDALONE: skip pip/setuptools installation
 
 # Hack up the system configuration settings to aid portability.
 #
@@ -1144,6 +1205,9 @@ fi
 # Downstream consumers don't require bytecode files. So remove them.
 # Ideally we'd adjust the build system. But meh.
 find "${ROOT}/out/python/install" -type d -name __pycache__ -print0 | xargs -0 rm -rf
+
+# PYSTANDALONE: create an empty file to ensure the include directory exists (we remove the contents later)
+touch "${ROOT}/out/python/install/include/python${PYTHON_MAJMIN_VERSION}/.empty"
 
 # Ensure lib-dynload exists, or Python complains on startup.
 LIB_DYNLOAD=${ROOT}/out/python/install/lib/python${PYTHON_MAJMIN_VERSION}${PYTHON_LIB_SUFFIX}/lib-dynload

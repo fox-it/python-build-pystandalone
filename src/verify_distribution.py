@@ -3,6 +3,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import importlib.machinery
+import io
 import os
 import struct
 import subprocess
@@ -43,6 +44,104 @@ if "TERMINFO_DIRS" not in os.environ:
 
 
 class TestPythonInterpreter(unittest.TestCase):
+    def test_pystandalone(self):
+        import _pystandalone
+
+        assert _pystandalone is not None, "_pystandalone module not found"
+
+        assert not _pystandalone.has_library(), "Unexpected library present"
+        assert not _pystandalone.has_payload(), "Unexpected payload present"
+        assert not _pystandalone.has_bootstrap(), "Unexpected bootstrap present"
+
+        assert _pystandalone.get_library() is None
+        assert _pystandalone.get_bootstrap() is None
+        assert _pystandalone.get_payload() is None
+
+        buf = _pystandalone.rand_bytes(10)
+        assert isinstance(buf, bytes) and len(buf) == 10
+
+        assert _pystandalone.ciphers
+
+        for name, key_len, iv_len, expected in [
+            ("aes-256-cbc", 32, 16, "4272671e68ed88bb2c8d1006920083ab"),
+            ("aes-192-cbc", 24, 16, "edd9764f98be22399bdf7892b77d2450"),
+            ("aes-128-cbc", 16, 16, "4d0f1cb7b95156fb94bc31ee34a3f461"),
+            ("aes-256-ecb", 32, 0, "be93ce4e7fff84620c170e74a572d73a"),
+            ("aes-192-ecb", 24, 0, "e76a1ec14da673b424527c8e991d3d44"),
+            ("aes-128-ecb", 16, 0, "dfde7f4034e4f56c1ba162edf8359f41"),
+            ("aes-256-gcm", 32, 12, "374f5886f101f65244bafc8122e9b7a0"),
+        ]:
+            try:
+                cipher = _pystandalone.cipher(name, b"\x69" * key_len, b"\x67" * iv_len)
+            except ValueError as e:
+                raise ValueError(f"cipher {name} is unsupported") from e
+
+            assert cipher.encrypt(b"\x42" * 16) == bytes.fromhex(expected), (
+                f"cipher {name} did not return the expected value"
+            )
+
+        public_key = """
+-----BEGIN PUBLIC KEY-----
+MIGeMA0GCSqGSIb3DQEBAQUAA4GMADCBiAKBgGcYJbjRfFzEyqUJllBLXXAl/KYf
+nng5tHAwY1CmOkhdJc4c+vPlXewaiNzQl7XWW9491Is5K24q6kKfUUw7HGOSW4IV
++BXnbCQJX2mvKE1W6/ajdzQ3mnX1glG7PehZvVTgntfRrAjasHRo+hslE5nYNMWZ
+os91j5H7o/zhdI/JAgMBAAE=
+-----END PUBLIC KEY-----
+    """
+
+        cipher = _pystandalone.rsa(public_key.strip())
+        assert cipher.encrypt(b"This is a test!"), "RSA encryption failed"
+
+        import hashlib
+
+        assert (
+            hashlib.sha256(cipher.der()).hexdigest()
+            == "983bc41ea25170b001189b8344a8fbd8dba1a07c0c353f96dbd36b84be1255e0"
+        ), "RSA DER output is incorrect"
+
+        import zipfile
+        import zipimport
+
+        for func in (
+            zipimport.metazipimporter.__init__,
+            zipimport._read_directory,
+            zipimport._get_data,
+        ):
+            assert "buf" in func.__code__.co_varnames
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("hello.py", "print('Hello, world!')")
+
+        meta_zip = zipimport.metazipimporter("<archive>", buf.getvalue())
+        assert meta_zip.archive == "<archive>"
+        assert meta_zip._buf == buf.getvalue()
+
+        meta_spec = meta_zip.find_spec("hello")
+        assert meta_spec.name == "hello"
+        assert meta_spec.origin == f"<archive>{os.sep}hello.py"
+        assert meta_zip.get_data("hello.py") == b"print('Hello, world!')"
+
+        import datetime
+
+        assert datetime.timezone.utc, "Issues with datetime module"
+
+        import subprocess
+
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["cmd", "/c", "echo Hello from pystandalone"], capture_output=True
+            )
+        else:
+            result = subprocess.run(
+                ["echo", "Hello from pystandalone"], capture_output=True
+            )
+
+        assert result.returncode == 0, "Subprocess call failed"
+        assert result.stdout.strip() == b"Hello from pystandalone", (
+            "Subprocess output is incorrect"
+        )
+
     def test_compression(self):
         import bz2
         import lzma
@@ -70,6 +169,7 @@ class TestPythonInterpreter(unittest.TestCase):
             pass
 
     @unittest.skipIf(os.name == "nt", "curses not available on Windows")
+    @unittest.skipIf(True, "curses is disabled in pystandalone")
     def test_curses_import(self):
         import curses
 
@@ -77,6 +177,7 @@ class TestPythonInterpreter(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "curses not available on Windows")
     @unittest.skipIf("TERM" not in os.environ, "TERM not set")
+    @unittest.skipIf(True, "curses is disabled in pystandalone")
     def test_curses_interactive(self):
         import curses
 
@@ -116,6 +217,7 @@ class TestPythonInterpreter(unittest.TestCase):
         for hash in wanted_hashes:
             self.assertIn(hash, hashlib.algorithms_available)
 
+    @unittest.skipIf(True, "sqlite3 is disabled in pystandalone")
     def test_sqlite(self):
         import sqlite3
 
@@ -228,6 +330,7 @@ class TestPythonInterpreter(unittest.TestCase):
 
     @unittest.skipIf("TCL_LIBRARY" not in os.environ, "TCL_LIBRARY not set")
     @unittest.skipIf("DISPLAY" not in os.environ, "DISPLAY not set")
+    @unittest.skipIf(True, "tkinter is disabled in pystandalone")
     def test_tkinter(self):
         import tkinter as tk
 

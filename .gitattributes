@@ -1,0 +1,2 @@
+# Normalize line endings for our patch files
+pystandalone/patch/*.patch text eol=lf

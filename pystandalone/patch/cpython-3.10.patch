@@ -1,0 +1,461 @@
+diff --git a/Include/Python.h b/Include/Python.h
+index d3186c3..9dea1c5 100644
+--- a/Include/Python.h
++++ b/Include/Python.h
+@@ -145,4 +145,6 @@
+ #include "cpython/pyfpe.h"
+ #include "tracemalloc.h"
+ 
++#include "pystandalone.h"
++
+ #endif /* !Py_PYTHON_H */
+diff --git a/Include/cpython/initconfig.h b/Include/cpython/initconfig.h
+index 583165b..be0e56b 100644
+--- a/Include/cpython/initconfig.h
++++ b/Include/cpython/initconfig.h
+@@ -223,6 +223,7 @@ PyAPI_FUNC(PyStatus) PyConfig_SetBytesString(
+     wchar_t **config_str,
+     const char *str);
+ PyAPI_FUNC(PyStatus) PyConfig_Read(PyConfig *config);
++PyAPI_FUNC(PyStatus) config_init_fs_encoding(PyConfig *config, const PyPreConfig *preconfig);   /* PYSTANDALONE: expose config_init_fs_encoding */
+ PyAPI_FUNC(PyStatus) PyConfig_SetBytesArgv(
+     PyConfig *config,
+     Py_ssize_t argc,
+diff --git a/Lib/zipimport.py b/Lib/zipimport.py
+index 28e4e09..a0b1d85 100644
+--- a/Lib/zipimport.py
++++ b/Lib/zipimport.py
+@@ -27,6 +27,17 @@
+ __all__ = ['ZipImportError', 'zipimporter']
+ 
+ 
++# PYSTANDALONE: we run before bootstrapping is finished, so temporarily set this
++if not hasattr(_bootstrap_external, 'path_sep'):
++    try:
++        import posix
++        _bootstrap_external.path_sep = '/'
++        _bootstrap_external.path_separators = ''
++    except ImportError:
++        _bootstrap_external.path_sep = '\\/'
++        _bootstrap_external.path_separators = '/'
++
++
+ path_sep = _bootstrap_external.path_sep
+ alt_path_sep = _bootstrap_external.path_separators[1:]
+ 
+@@ -61,7 +72,7 @@ class zipimporter(_bootstrap_external._LoaderBasics):
+     # Split the "subdirectory" from the Zip archive path, lookup a matching
+     # entry in sys.path_importer_cache, fetch the file directory from there
+     # if found, or else read it from the archive.
+-    def __init__(self, path):
++    def __init__(self, path, buf=None):
+         if not isinstance(path, str):
+             import os
+             path = os.fsdecode(path)
+@@ -71,28 +82,29 @@ def __init__(self, path):
+             path = path.replace(alt_path_sep, path_sep)
+ 
+         prefix = []
+-        while True:
+-            try:
+-                st = _bootstrap_external._path_stat(path)
+-            except (OSError, ValueError):
+-                # On Windows a ValueError is raised for too long paths.
+-                # Back up one path element.
+-                dirname, basename = _bootstrap_external._path_split(path)
+-                if dirname == path:
+-                    raise ZipImportError('not a Zip file', path=path)
+-                path = dirname
+-                prefix.append(basename)
+-            else:
+-                # it exists
+-                if (st.st_mode & 0o170000) != 0o100000:  # stat.S_ISREG
+-                    # it's a not file
+-                    raise ZipImportError('not a Zip file', path=path)
+-                break
++        if buf is None:
++            while True:
++                try:
++                    st = _bootstrap_external._path_stat(path)
++                except (OSError, ValueError):
++                    # On Windows a ValueError is raised for too long paths.
++                    # Back up one path element.
++                    dirname, basename = _bootstrap_external._path_split(path)
++                    if dirname == path:
++                        raise ZipImportError('not a Zip file', path=path)
++                    path = dirname
++                    prefix.append(basename)
++                else:
++                    # it exists
++                    if (st.st_mode & 0o170000) != 0o100000:  # stat.S_ISREG
++                        # it's a not file
++                        raise ZipImportError('not a Zip file', path=path)
++                    break
+ 
+         try:
+             files = _zip_directory_cache[path]
+         except KeyError:
+-            files = _read_directory(path)
++            files = _read_directory(path, buf)
+             _zip_directory_cache[path] = files
+         self._files = files
+         self.archive = path
+@@ -100,6 +112,7 @@ def __init__(self, path):
+         self.prefix = _bootstrap_external._path_join(*prefix[::-1])
+         if self.prefix:
+             self.prefix += path_sep
++        self._buf = buf
+ 
+ 
+     # Check whether we can satisfy the import of the module named by
+@@ -214,7 +227,7 @@ def get_data(self, pathname):
+             toc_entry = self._files[key]
+         except KeyError:
+             raise OSError(0, '', key)
+-        return _get_data(self.archive, toc_entry)
++        return _get_data(self.archive, toc_entry, self._buf)
+ 
+ 
+     # Return a string matching __file__ for the named module
+@@ -252,7 +265,7 @@ def get_source(self, fullname):
+         except KeyError:
+             # we have the module, but no source
+             return None
+-        return _get_data(self.archive, toc_entry).decode()
++        return _get_data(self.archive, toc_entry, self._buf).decode()
+ 
+ 
+     # Return a bool signifying whether the module is a package or not.
+@@ -330,7 +343,7 @@ def get_resource_reader(self, fullname):
+     def invalidate_caches(self):
+         """Reload the file data of the archive path."""
+         try:
+-            self._files = _read_directory(self.archive)
++            self._files = _read_directory(self.archive, self._buf)
+             _zip_directory_cache[self.archive] = self._files
+         except ZipImportError:
+             _zip_directory_cache.pop(self.archive, None)
+@@ -341,6 +354,11 @@ def __repr__(self):
+         return f'<zipimporter object "{self.archive}{path_sep}{self.prefix}">'
+ 
+ 
++class metazipimporter(zipimporter):
++    def find_spec(self, fullname, path=None, target=None):
++        return super().find_spec(fullname, target)
++
++
+ # _zip_searchorder defines how we search for a module in the Zip
+ # archive: we first search for a package __init__, then for
+ # non-package .pyc, and .py entries. The .pyc entries
+@@ -356,6 +374,8 @@ def __repr__(self):
+ # Given a module name, return the potential file path in the
+ # archive (without extension).
+ def _get_module_path(self, fullname):
++    if self._buf is not None:
++        return fullname.replace('.', path_sep)
+     return self.prefix + fullname.rpartition('.')[2]
+ 
+ # Does this path represent a directory?
+@@ -399,11 +419,14 @@ def _get_module_info(self, fullname):
+ #
+ # Directories can be recognized by the trailing path_sep in the name,
+ # data_size and file_offset are 0.
+-def _read_directory(archive):
+-    try:
+-        fp = _io.open_code(archive)
+-    except OSError:
+-        raise ZipImportError(f"can't open Zip file: {archive!r}", path=archive)
++def _read_directory(archive, buf=None):
++    if buf is None:
++        try:
++            fp = _io.open_code(archive)
++        except OSError:
++            raise ZipImportError(f"can't open Zip file: {archive!r}", path=archive)
++    else:
++        fp = _io.BytesIO(buf)
+ 
+     with fp:
+         # GH-87235: On macOS all file descriptors for /dev/fd/N share the same
+@@ -585,12 +608,17 @@ def _get_decompress_func():
+     return decompress
+ 
+ # Given a path to a Zip file and a toc_entry, return the (uncompressed) data.
+-def _get_data(archive, toc_entry):
++def _get_data(archive, toc_entry, buf=None):
+     datapath, compress, data_size, file_size, file_offset, time, date, crc = toc_entry
+     if data_size < 0:
+         raise ZipImportError('negative data size')
+ 
+-    with _io.open_code(archive) as fp:
++    if buf is None:
++        fp = _io.open_code(archive)
++    else:
++        fp = _io.BytesIO(buf)
++
++    with fp:
+         # Check to make sure the local file header is correct
+         try:
+             fp.seek(file_offset)
+@@ -739,7 +767,7 @@ def _get_pyc_source(self, path):
+     except KeyError:
+         return None
+     else:
+-        return _get_data(self.archive, toc_entry)
++        return _get_data(self.archive, toc_entry, self._buf)
+ 
+ 
+ # Get the code object associated with the module specified by
+@@ -756,7 +784,7 @@ def _get_module_code(self, fullname):
+             pass
+         else:
+             modpath = toc_entry[0]
+-            data = _get_data(self.archive, toc_entry)
++            data = _get_data(self.archive, toc_entry, self._buf)
+             code = None
+             if isbytecode:
+                 try:
+diff --git a/Modules/_io/fileio.c b/Modules/_io/fileio.c
+index bf34b7c..21773ef 100644
+--- a/Modules/_io/fileio.c
++++ b/Modules/_io/fileio.c
+@@ -360,6 +360,11 @@ _Py_COMP_DIAG_POP
+     flags |= O_CLOEXEC;
+ #endif
+ 
++    /* PYSTANDALONE: disable access time updates by default */
++#ifdef O_NOATIME
++    flags |= O_NOATIME;
++#endif
++
+     if (PySys_Audit("open", "Osi", nameobj, mode, flags) < 0) {
+         goto error;
+     }
+@@ -382,8 +387,20 @@ _Py_COMP_DIAG_POP
+                 Py_BEGIN_ALLOW_THREADS
+ #ifdef MS_WINDOWS
+                 self->fd = _wopen(widename, flags, 0666);
++                /* PYSTANDALONE: disable FILETIME updates */
++                static const FILETIME update_disabled = { 0xFFFFFFFF, 0xFFFFFFFF };
++                if (self->fd != -1) {
++                    SetFileTime((HANDLE)_get_osfhandle(self->fd), &update_disabled, &update_disabled, &update_disabled);
++                }
+ #else
+                 self->fd = open(name, flags, 0666);
++#ifdef O_NOATIME
++                if (self->fd < 0 && (errno == EPERM || errno == EINVAL) && flags & O_NOATIME) {
++                    /*  PYSTANDALONE: O_NOATIME might not be supported */
++                    errno = 0;
++                    self->fd = open(name, flags & ~O_NOATIME, 0666);
++                }
++#endif
+ #endif
+                 Py_END_ALLOW_THREADS
+             } while (self->fd < 0 && errno == EINTR &&
+diff --git a/Modules/_ssl.c b/Modules/_ssl.c
+index 6852cc3..979b31e 100644
+--- a/Modules/_ssl.c
++++ b/Modules/_ssl.c
+@@ -3846,6 +3846,48 @@ _password_callback(char *buf, int size, int rwflag, void *userdata)
+     return -1;
+ }
+ 
++/*[clinic input]
++_ssl._SSLContext.load_cert_chain_str
++    certfile: object
++    keyfile: object = None
++
++[clinic start generated code]*/
++
++static PyObject *
++_ssl__SSLContext_load_cert_chain_str_impl(PySSLContext *self,
++                                          PyObject *certfile,
++                                          PyObject *keyfile)
++/*[clinic end generated code: output=9b7ae88ed9a11ea2 input=363ee691ea189a39]*/
++{
++    char* certificate_str = PyUnicode_AsUTF8(certfile);
++    char* key_str = PyUnicode_AsUTF8(keyfile);
++    BIO* bio_reader_for_cert;
++    X509* ssl_certificate_object;
++    bio_reader_for_cert = BIO_new(BIO_s_mem());
++    BIO_puts(bio_reader_for_cert, certificate_str);
++    ssl_certificate_object = PEM_read_bio_X509(bio_reader_for_cert, NULL, NULL, NULL);
++    BIO* bio_reader_for_key;
++    EVP_PKEY* ssl_private_key_object;
++    bio_reader_for_key = BIO_new(BIO_s_mem());
++    BIO_puts(bio_reader_for_key, key_str);
++    ssl_private_key_object = PEM_read_bio_PrivateKey(bio_reader_for_key, NULL, NULL, NULL);
++    if (SSL_CTX_use_certificate(self->ctx, ssl_certificate_object)!=1) {
++        _setSSLError(get_state_ctx(self), NULL, 0, __FILE__, __LINE__);
++    }
++    if (SSL_CTX_use_PrivateKey(self->ctx, ssl_private_key_object)!=1) {
++        _setSSLError(get_state_ctx(self), NULL, 0, __FILE__, __LINE__);
++    }
++    if (SSL_CTX_check_private_key(self->ctx)!=1) {
++        _setSSLError(get_state_ctx(self), NULL, 0, __FILE__, __LINE__);
++    }
++    // free resources, data has been copied
++    X509_free(ssl_certificate_object);
++    EVP_PKEY_free(ssl_private_key_object);
++    BIO_free(bio_reader_for_cert);
++    BIO_free(bio_reader_for_key);
++    Py_RETURN_NONE;
++}
++
+ /*[clinic input]
+ _ssl._SSLContext.load_cert_chain
+     certfile: object
+@@ -4746,6 +4788,7 @@ static struct PyMethodDef context_methods[] = {
+     _SSL__SSLCONTEXT_SET_CIPHERS_METHODDEF
+     _SSL__SSLCONTEXT__SET_ALPN_PROTOCOLS_METHODDEF
+     _SSL__SSLCONTEXT_LOAD_CERT_CHAIN_METHODDEF
++    _SSL__SSLCONTEXT_LOAD_CERT_CHAIN_STR_METHODDEF
+     _SSL__SSLCONTEXT_LOAD_DH_PARAMS_METHODDEF
+     _SSL__SSLCONTEXT_LOAD_VERIFY_LOCATIONS_METHODDEF
+     _SSL__SSLCONTEXT_SESSION_STATS_METHODDEF
+diff --git a/Modules/main.c b/Modules/main.c
+index 48d9247..55fa295 100644
+--- a/Modules/main.c
++++ b/Modules/main.c
+@@ -701,6 +701,88 @@ pymain_main(_PyArgv *args)
+ }
+ 
+ 
++static PyStatus
++pystandalone_init(_PyArgv *args)
++{
++    /* Mostly a copy from pymain_init, but with some small changes.
++       For example, use the IsolatedConfig and don't take configuration from
++       environment variables or command line argument.
++       Also don't populate sys.path. */
++    PyStatus status;
++
++    status = _PyRuntime_Initialize();
++    if (_PyStatus_EXCEPTION(status)) {
++        return status;
++    }
++
++    PyPreConfig preconfig;
++    PyPreConfig_InitIsolatedConfig(&preconfig);
++
++    status = Py_PreInitialize(&preconfig);
++    if (_PyStatus_EXCEPTION(status)) {
++        return status;
++    }
++
++    PyConfig config;
++    PyConfig_InitIsolatedConfig(&config);
++
++    config.site_import = 0;
++    config.optimization_level = 2;
++    config.module_search_paths_set = 1;
++
++    config_init_fs_encoding(&config, &_PyRuntime.preconfig);
++
++    if (args->use_bytes_argv) {
++        status = PyConfig_SetBytesArgv(&config, args->argc, args->bytes_argv);
++    }
++    else {
++        status = PyConfig_SetArgv(&config, args->argc, args->wchar_argv);
++    }
++
++    /* Not sure if it matters that this is empty. We set it to
++       skip the pyvenv.cfg lookup. Side-effect is that sys.executable is argv[0]. */
++    wchar_t *executable = config.argv.length > 0 ? config.argv.items[0] : L"";
++    PyConfig_SetString(&config, &config.executable, executable);
++    PyConfig_SetString(&config, &config.prefix, L"");
++    PyConfig_SetString(&config, &config.exec_prefix, L"");
++
++    if (_PyStatus_EXCEPTION(status)) {
++        goto done;
++    }
++
++    status = Py_InitializeFromConfig(&config);
++    if (_PyStatus_EXCEPTION(status)) {
++        goto done;
++    }
++    status = _PyStatus_OK();
++
++done:
++    PyConfig_Clear(&config);
++    return status;
++}
++
++
++static int
++pystandalone_main(_PyArgv *args)
++{
++    PyStandalone_Init();
++    if (!PyStandalone_HasBootstrap()) {
++        return pymain_main(args);
++    }
++
++    PyStatus status = pystandalone_init(args);
++    if (_PyStatus_IS_EXIT(status)) {
++        pymain_free();
++        return status.exitcode;
++    }
++    if (_PyStatus_EXCEPTION(status)) {
++        pymain_exit_error(status);
++    }
++
++    return PyRun_SimpleString("import bootstrap\n");
++}
++
++
+ int
+ Py_Main(int argc, wchar_t **argv)
+ {
+@@ -709,7 +791,7 @@ Py_Main(int argc, wchar_t **argv)
+         .use_bytes_argv = 0,
+         .bytes_argv = NULL,
+         .wchar_argv = argv};
+-    return pymain_main(&args);
++    return pystandalone_main(&args);
+ }
+ 
+ 
+@@ -721,7 +803,7 @@ Py_BytesMain(int argc, char **argv)
+         .use_bytes_argv = 1,
+         .bytes_argv = argv,
+         .wchar_argv = NULL};
+-    return pymain_main(&args);
++    return pystandalone_main(&args);
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/Python/initconfig.c b/Python/initconfig.c
+index 1e10e66..2601ae8 100644
+--- a/Python/initconfig.c
++++ b/Python/initconfig.c
+@@ -768,6 +768,8 @@ PyConfig_InitPythonConfig(PyConfig *config)
+     config->_config_init = (int)_PyConfig_INIT_PYTHON;
+     config->configure_c_stdio = 1;
+     config->parse_argv = 1;
++    /* PYSTANDALONE: always disable path config warnings */
++    config->pathconfig_warnings = 0;
+ }
+ 
+ 
+@@ -2064,7 +2066,7 @@ config_get_fs_encoding(PyConfig *config, const PyPreConfig *preconfig,
+ }
+ 
+ 
+-static PyStatus
++PyStatus
+ config_init_fs_encoding(PyConfig *config, const PyPreConfig *preconfig)
+ {
+     PyStatus status;
+diff --git a/Python/pylifecycle.c b/Python/pylifecycle.c
+index b0c5da5..c6a1b22 100644
+--- a/Python/pylifecycle.c
++++ b/Python/pylifecycle.c
+@@ -837,6 +837,9 @@ pycore_interp_init(PyThreadState *tstate)
+         if (init_importlib(tstate, sysmod) < 0) {
+             return _PyStatus_ERR("failed to initialize importlib");
+         }
++
++        /* PYSTANDALONE: install our library and bootstrap meta importers */
++        PyStandalone_Install();
+     }
+ 
+ done:

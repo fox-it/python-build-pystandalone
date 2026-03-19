@@ -1,0 +1,179 @@
+name: sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # daily at 02:00 UTC
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Strategy: create sync branch from main, merge the upstream tag INTO it,
+# then PR back to main.
+
+jobs:
+  sync:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PYSTANDALONE_SYNC_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PYSTANDALONE_SYNC_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/astral-sh/python-build-standalone.git
+          git fetch upstream --tags --no-recurse-submodules
+
+      - name: Detect latest upstream tag
+        id: detect
+        run: |
+          # Upstream uses date-format tags (e.g. 20260310).
+          UPSTREAM_TAG=$(git tag -l --sort=-version:refname | head -n 1)
+          LOCAL_TAG=$(git tag -l --sort=-version:refname --merged origin/main | head -n 1)
+
+          echo "upstream=${UPSTREAM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "local=${LOCAL_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: ${UPSTREAM_TAG}  Fork synced to: ${LOCAL_TAG}"
+
+          if [ -z "${UPSTREAM_TAG}" ]; then
+            echo "::error::No upstream tags found"
+            exit 1
+          fi
+
+          if [ "${UPSTREAM_TAG}" = "${LOCAL_TAG}" ]; then
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+            echo "Already up-to-date."
+          else
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing PR
+        if: steps.detect.outputs.needs_sync == 'true'
+        id: pr_check
+        env:
+          TAG: ${{ steps.detect.outputs.upstream }}
+        run: |
+          BRANCH="sync/${TAG}"
+          EXISTING=$(gh pr list --head "${BRANCH}" --state all --json number --jq '.[0].number // ""')
+          if [ -n "${EXISTING}" ]; then
+            echo "::notice::PR #${EXISTING} already exists for ${BRANCH}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch and merge upstream tag
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.skip == 'false'
+        id: sync
+        env:
+          TAG: ${{ steps.detect.outputs.upstream }}
+          LOCAL_TAG: ${{ steps.detect.outputs.local }}
+        run: |
+          BRANCH="sync/${TAG}"
+
+          # Branch from main, then merge the upstream tag into it.
+          # This preserves upstream commit SHAs as merge parents.
+          git checkout -b "${BRANCH}" origin/main
+
+          if git merge --no-edit "refs/tags/${TAG}"; then
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          else
+            # Commit with conflict markers so they're visible in the PR diff.
+            # VS Code can resolve these with its merge conflict UI.
+            CONFLICTING=$(git diff --name-only --diff-filter=U | sort)
+            echo "::warning::Merge conflicts in: ${CONFLICTING//$'\n'/, }"
+            git add -A
+            git commit --no-edit -m "Merge upstream tag ${TAG} (conflicts — see PR)"
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "CONFLICTING_FILES<<EOF"
+              echo "${CONFLICTING}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+          git push origin "HEAD:refs/heads/${BRANCH}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure sync label exists
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.skip == 'false'
+        run: gh label create "sync" --color "0075ca" --description "Automated upstream sync" || true
+
+      - name: Open pull request
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.detect.outputs.upstream }}
+          LOCAL_TAG: ${{ steps.detect.outputs.local }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+          CONFLICTS: ${{ steps.sync.outputs.conflicts }}
+          CONFLICTING_FILES: ${{ steps.sync.outputs.CONFLICTING_FILES }}
+        run: |
+          COMMIT_COUNT=$(git rev-list --count "refs/tags/${LOCAL_TAG}..refs/tags/${TAG}" 2>/dev/null || echo "?")
+
+          if [ "${CONFLICTS}" = "true" ]; then
+            {
+              echo "> [!WARNING]"
+              echo "> Merge conflicts detected when merging upstream tag **${TAG}** into main."
+              echo "> The conflict markers have been committed so they are visible in the PR diff."
+              echo ""
+              echo "### Conflicting files"
+              echo ""
+              echo '```'
+              echo "${CONFLICTING_FILES}"
+              echo '```'
+              echo ""
+              echo "### Resolution"
+              echo ""
+              echo '```bash'
+              echo "git fetch origin"
+              echo "git checkout ${BRANCH}"
+              echo "# Resolve conflict markers"
+              echo "git add -A && git commit -m \"Resolve merge conflicts for ${TAG}\""
+              echo "git push origin ${BRANCH}"
+              echo '```'
+            } > /tmp/pr-body.md
+          else
+            {
+              echo "Automated merge of upstream tag **${TAG}** (${COMMIT_COUNT} new upstream commits since **${LOCAL_TAG}**)."
+            } > /tmp/pr-body.md
+          fi
+
+          DRAFT_FLAG=""
+          if [ "${CONFLICTS}" = "true" ]; then
+            DRAFT_FLAG="--draft"
+          fi
+
+          gh pr create \
+            --title "Sync upstream tag ${TAG}" \
+            --body-file /tmp/pr-body.md \
+            --head "${BRANCH}" \
+            --base main \
+            --label "sync" \
+            ${DRAFT_FLAG}
+
+  check-conflicts:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check for conflict markers
+        run: |
+          # Search tracked files for conflict markers.
+          if git grep -rlE '^<{7} |^>{7} ' -- . ':!.github/workflows/sync.yml'; then
+            echo "::error::Conflict markers found in the files listed above."
+            exit 1
+          fi
+          echo "No conflict markers found."
