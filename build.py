@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(os.path.abspath(__file__)).parent
+PYSTANDALONE_DIR = ROOT / "pystandalone"
 
 
 def run():
@@ -21,7 +22,7 @@ def run():
     if system == "Darwin" or system == "Linux":
         args = [
             python,
-            "build-main.py",
+            str(PYSTANDALONE_DIR / "build.py"),
             *sys.argv[1:],
         ]
         make_dir = ROOT / "cpython-unix"
@@ -30,7 +31,7 @@ def run():
     elif system == "Windows":
         args = [
             python,
-            "build.py",
+            str(PYSTANDALONE_DIR / "build.py"),
             *sys.argv[1:],
         ]
         cwd = str(ROOT / "cpython-windows")

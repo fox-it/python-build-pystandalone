@@ -184,6 +184,7 @@ jobs:
             --labels "${STEPS_GET_LABELS_OUTPUTS_LABELS}" \
             --max-shards 2 \
             ${{ (steps.check-pythonbuild.outputs.changed == 'true' || github.ref == 'refs/heads/main') && '--force-crate-build' || '' }} \
+            --free-runners \
             > matrix.json
 
           echo "python-build-matrix-0=$(jq -c '."python-build"["0"]' matrix.json)" >> $GITHUB_OUTPUT
@@ -204,7 +205,7 @@ jobs:
         env:
           STEPS_GET_LABELS_OUTPUTS_LABELS: ${{ steps.get-labels.outputs.labels }}
 
-  build-0:
+  build:
     needs:
       - generate-matrix
       - crate-build
@@ -311,19 +312,3 @@ jobs:
         env:
           MATRIX_RUN: ${{ matrix.run }}
           MATRIX_LIBC: ${{ matrix.libc }}
-
-  build-1:
-    needs:
-      - generate-matrix
-      - crate-build
-      - image
-    # Permissions used for actions/attest-build-provenance
-    permissions:
-      id-token: write
-      attestations: write
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.python-build-matrix-1) }}
-      fail-fast: false
-    name: ${{ matrix.target_triple }} / ${{ matrix.python }} / ${{ matrix.build_options }}
-    steps: *build_steps

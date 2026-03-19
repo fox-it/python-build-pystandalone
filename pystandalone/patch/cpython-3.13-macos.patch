@@ -1,0 +1,23 @@
+diff --git i/Makefile.pre.in w/Makefile.pre.in
+index a7dc970..2aa4ac7 100644
+--- i/Makefile.pre.in
++++ w/Makefile.pre.in
+@@ -471,6 +471,8 @@ PYTHON_OBJS=	\
+ 		Python/pyhash.o \
+ 		Python/pylifecycle.o \
+ 		Python/pymath.o \
++		Python/pystandalone.o \
++		Python/pystandalone_payload.o \
+ 		Python/pystate.o \
+ 		Python/pythonrun.o \
+ 		Python/pytime.o \
+@@ -499,6 +501,9 @@ PYTHON_OBJS=	\
+ 		$(DTRACE_OBJS) \
+ 		@PLATFORM_OBJS@
+
++Python/pystandalone_payload.o: Python/pystandalone_payload.S
++	$(CC) $(PY_CORE_CFLAGS) -c $< -o $@
++
+
+ ##########################################################################
+ # Objects

@@ -11,13 +11,7 @@ darwin:
       - "3.14"
       - "3.15"
     build_options:
-      - debug
       - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
 
   x86_64-apple-darwin:
     arch: x86_64
@@ -29,13 +23,7 @@ darwin:
       - "3.14"
       - "3.15"
     build_options:
-      - debug
       - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
     run: true
 
 linux:
@@ -50,118 +38,7 @@ linux:
       - "3.14"
       - "3.15"
     build_options:
-      - debug
       - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
-
-  armv7-unknown-linux-gnueabi:
-    arch: armv7
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-
-  armv7-unknown-linux-gnueabihf:
-    arch: armv7
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-
-  s390x-unknown-linux-gnu:
-    arch: s390x
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-
-  ppc64le-unknown-linux-gnu:
-    arch: ppc64le
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-
-  riscv64-unknown-linux-gnu:
-    arch: riscv64
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
 
   x86_64-unknown-linux-gnu:
     arch: x86_64
@@ -174,76 +51,7 @@ linux:
       - "3.14"
       - "3.15"
     build_options:
-      - debug
       - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v2-unknown-linux-gnu:
-    arch: x86_64
-    arch_variant: v2
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v3-unknown-linux-gnu:
-    arch: x86_64
-    arch_variant: v3
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v4-unknown-linux-gnu:
-    arch: x86_64
-    arch_variant: v4
-    libc: gnu
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug
-      - pgo+lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+pgo+lto
-        minimum-python-version: "3.13"
     run: true
 
   x86_64-unknown-linux-musl:
@@ -257,96 +65,7 @@ linux:
       - "3.14"
       - "3.15"
     build_options:
-      - debug+static
-      - noopt+static
       - lto+static
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v2-unknown-linux-musl:
-    arch: x86_64
-    arch_variant: v2
-    libc: musl
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug+static
-      - noopt+static
-      - lto+static
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v3-unknown-linux-musl:
-    arch: x86_64
-    arch_variant: v3
-    libc: musl
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug+static
-      - noopt+static
-      - lto+static
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
-    run: true
-
-  x86_64_v4-unknown-linux-musl:
-    arch: x86_64
-    arch_variant: v4
-    libc: musl
-    python_versions:
-      - "3.10"
-      - "3.11"
-      - "3.12"
-      - "3.13"
-      - "3.14"
-      - "3.15"
-    build_options:
-      - debug+static
-      - noopt+static
-      - lto+static
-      - debug
-      - noopt
-      - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
     run: true
 
   aarch64-unknown-linux-musl:
@@ -360,19 +79,7 @@ linux:
       - "3.14"
       - "3.15"
     build_options:
-      # TODO: Static support is current blocked by some compiler-rt linking issues
-      # - debug+static
-      # - noopt+static
-      # - lto+static
-      - debug
-      - noopt
       - lto
-    build_options_conditional:
-      - options:
-          - freethreaded+debug
-          - freethreaded+noopt
-          - freethreaded+lto
-        minimum-python-version: "3.13"
     run: true
 
 windows:
@@ -389,10 +96,6 @@ windows:
     vs_version: "2022"
     build_options:
       - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"
 
   x86_64-pc-windows-msvc:
     arch: x86_64
@@ -410,10 +113,6 @@ windows:
       minimum-python-version: "3.15"
     build_options:
       - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"
 
   aarch64-pc-windows-msvc:
     arch: aarch64
@@ -429,7 +128,3 @@ windows:
     vs_version: "2022"
     build_options:
       - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"

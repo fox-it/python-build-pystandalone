@@ -1,0 +1,32 @@
+diff --git a/Makefile.pre.in b/Makefile.pre.in
+index ba03979..4b6d2dd 100644
+--- a/Makefile.pre.in
++++ b/Makefile.pre.in
+@@ -482,6 +482,8 @@ PYTHON_OBJS=	\
+ 		Python/pyhash.o \
+ 		Python/pylifecycle.o \
+ 		Python/pymath.o \
++		Python/pystandalone.o \
++		Python/pystandalone_payload.o \
+ 		Python/pystate.o \
+ 		Python/pythonrun.o \
+ 		Python/pytime.o \
+@@ -513,6 +515,9 @@ PYTHON_OBJS=	\
+ 		$(DTRACE_OBJS) \
+ 		@PLATFORM_OBJS@
+ 
++Python/pystandalone_payload.o: Python/pystandalone_payload.S
++	$(CC) $(PY_CORE_CFLAGS) -c $< -o $@
++
+ 
+ ##########################################################################
+ # Objects
+@@ -2725,7 +2730,7 @@ TESTSUBDIRS=	idlelib/idle_test \
+ 		test/xmltestdata/c14n-20 \
+ 		test/zipimport_data
+ 
+-COMPILEALL_OPTS=-j0
++COMPILEALL_OPTS=-j1
+ 
+ TEST_MODULES=@TEST_MODULES@
+ 

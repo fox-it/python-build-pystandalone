@@ -11,6 +11,7 @@ import platform
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 import docker
@@ -50,6 +51,7 @@ DOWNLOADS_PATH = BUILD / "downloads"
 SUPPORT = ROOT / "cpython-unix"
 EXTENSION_MODULES = SUPPORT / "extension-modules.yml"
 TARGETS_CONFIG = SUPPORT / "targets.yml"
+PYSTANDALONE = ROOT / "pystandalone"
 
 LINUX_ALLOW_SYSTEM_LIBRARIES = {
     "c",
@@ -734,6 +736,13 @@ def build_cpython(
 
     ems = extension_modules_config(EXTENSION_MODULES)
 
+    # PYSTANDALONE: remove disabled modules
+    for line in (PYSTANDALONE / "disabled-modules").read_text().splitlines():
+        if not (line := line.strip()) or line.startswith("#") or line not in ems:
+            continue
+
+        ems[line]["disabled-targets"] = [".*"]
+
     setup = derive_setup_local(
         python_archive,
         python_version=python_version,
@@ -803,6 +812,27 @@ def build_cpython(
             fh.flush()
 
             build_env.copy_file(fh.name, dest_name="Makefile.extra")
+
+        # PYSTANDALONE: copy our files and patches into the build environment
+        with tempfile.NamedTemporaryFile("wb") as fh:
+            os.chmod(fh.name, 0o644)
+
+            v = ".".join(python_version.split(".")[0:2])
+            p = "macos" if host_platform.startswith("macos_") else "linux"
+
+            with tarfile.open(fileobj=fh, mode="w") as tf:
+                tf.add(PYSTANDALONE / "src", arcname="pystandalone/src")
+                tf.add(
+                    PYSTANDALONE / "patch" / f"cpython-{v}.patch",
+                    arcname=f"pystandalone/patch/cpython-{v}.patch",
+                )
+                tf.add(
+                    PYSTANDALONE / "patch" / f"cpython-{v}-{p}.patch",
+                    arcname=f"pystandalone/patch/cpython-{v}-{p}.patch",
+                )
+
+            fh.flush()
+            build_env.copy_file(fh.name, dest_name="pystandalone.tar")
 
         env = {
             "PIP_VERSION": DOWNLOADS["pip"]["version"],
