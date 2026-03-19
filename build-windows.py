@@ -19,6 +19,7 @@ PYTHON = VENV / "Scripts" / "python.exe"
 ARCH = "-arm64" if platform.machine() == "ARM64" else ""
 REQUIREMENTS = ROOT / f"requirements.win{ARCH}.txt"
 WINDOWS_DIR = ROOT / "cpython-windows"
+PYSTANDALONE_DIR = ROOT / "pystandalone"
 
 
 def bootstrap():
@@ -41,7 +42,7 @@ def run():
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
 
-    args = [str(PYTHON), "build.py"]
+    args = [str(PYTHON), str(PYSTANDALONE_DIR / "build.py")]
     args.extend(sys.argv[1:])
 
     subprocess.run(args, cwd=str(WINDOWS_DIR), env=env, check=True, bufsize=0)

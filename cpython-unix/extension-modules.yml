@@ -991,3 +991,11 @@ zlib:
     - include
   links:
     - z
+
+_pystandalone:
+  sources:
+    - _pystandalone.c
+  includes-deps:
+    - include
+  links:
+    - crypto

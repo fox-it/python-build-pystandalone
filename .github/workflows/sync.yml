@@ -1,0 +1,106 @@
+name: sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # daily at 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ secrets.GH_PYSTANDALONE_SYNC_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PYSTANDALONE_SYNC_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/astral-sh/python-build-standalone.git
+          git fetch upstream --tags --no-recurse-submodules
+
+      - name: Detect latest upstream tag
+        id: detect
+        run: |
+          # Upstream uses date-format tags (e.g. 20260310); version:refname sorts these correctly.
+          UPSTREAM_TAG=$(git tag -l --sort=-version:refname | head -n 1)
+          # Latest tag already merged into our main - the last sync point.
+          LOCAL_TAG=$(git tag -l --sort=-version:refname --merged HEAD | head -n 1)
+
+          echo "upstream=${UPSTREAM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "local=${LOCAL_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Upstream: ${UPSTREAM_TAG}   Local: ${LOCAL_TAG}"
+
+          if [ -z "$UPSTREAM_TAG" ]; then
+            echo "::error::No upstream tags found."
+            exit 1
+          fi
+
+          # When multiple upstream tags have landed since our last sync, we target only the latest one.
+          if [ "$UPSTREAM_TAG" = "$LOCAL_TAG" ]; then
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+            echo "Already up-to-date."
+          else
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing PR
+        id: pr_check
+        if: steps.detect.outputs.needs_sync == 'true'
+        run: |
+          BRANCH="sync/${{ steps.detect.outputs.upstream }}"
+          # Check open *and* closed/merged PRs so we don't re-open for the same tag.
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --state all --json number --jq '.[0].number // ""')
+          if [ -n "$PR_NUMBER" ]; then
+            echo "PR #${PR_NUMBER} already exists for ${BRANCH} — skipping."
+            echo "pr_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch and merge upstream tag
+        id: merge
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.pr_exists == 'false'
+        run: |
+          TAG="${{ steps.detect.outputs.upstream }}"
+          BRANCH="sync/${TAG}"
+
+          # Push the upstream tag commit directly as a branch.
+          git push origin "refs/tags/${TAG}:refs/heads/${BRANCH}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure sync label exists
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.pr_exists == 'false'
+        run: |
+          gh label create "sync" \
+            --color "0075ca" \
+            --description "Automated upstream sync" \
+            || true
+
+      - name: Open pull request
+        if: steps.detect.outputs.needs_sync == 'true' && steps.pr_check.outputs.pr_exists == 'false'
+        run: |
+          TAG="${{ steps.detect.outputs.upstream }}"
+          DATE=$(date -u +'%Y-%m-%d')
+          BRANCH="${{ steps.merge.outputs.branch }}"
+
+          gh pr create \
+            --title "Sync upstream tag ${TAG}" \
+            --body "Automated sync triggered by upstream tag **${TAG}** (${DATE})." \
+            --head "${BRANCH}" \
+            --base main \
+            --label "sync"

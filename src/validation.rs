@@ -8,26 +8,31 @@ use {
     clap::ArgMatches,
     normalize_path::NormalizePath,
     object::{
-        Architecture, Endianness, FileKind, Object, SectionIndex, SymbolScope,
+        Architecture, Endianness, FileKind, Object, ObjectSection, SectionIndex, SymbolScope,
         elf::{
             ET_DYN, ET_EXEC, FileHeader32, FileHeader64, SHN_UNDEF, STB_GLOBAL, STB_WEAK,
             STV_DEFAULT, STV_HIDDEN,
         },
+        endian::LittleEndian as LE,
         macho::{LC_CODE_SIGNATURE, MH_OBJECT, MH_TWOLEVEL, MachHeader32, MachHeader64},
+        pe::RT_RCDATA,
         read::{
             elf::{Dyn, FileHeader, SectionHeader, Sym},
             macho::{LoadCommandVariant, MachHeader, Nlist, Section, Segment},
-            pe::{ImageNtHeaders, PeFile, PeFile32, PeFile64},
+            pe::{
+                ImageNtHeaders, ImageOptionalHeader, PeFile, PeFile32, PeFile64, ResourceNameOrId,
+            },
         },
     },
     once_cell::sync::Lazy,
     std::{
         collections::{BTreeSet, HashMap},
         convert::TryInto,
-        io::Read,
+        io::{Cursor, Read, Write},
         iter::FromIterator,
         path::{Path, PathBuf},
     },
+    zip::{ZipWriter, write::SimpleFileOptions},
 };
 
 const RECOGNIZED_TRIPLES: &[&str] = &[
@@ -116,44 +121,47 @@ const PE_ALLOWED_LIBRARIES: &[&str] = &[
     "WINMM.dll",
     "WS2_32.dll",
     // Our libraries.
-    "libcrypto-1_1.dll",
-    "libcrypto-1_1-x64.dll",
-    "libcrypto-3.dll",
-    "libcrypto-3-arm64.dll",
-    "libcrypto-3-x64.dll",
-    "libffi-8.dll",
-    "libssl-1_1.dll",
-    "libssl-1_1-x64.dll",
-    "libssl-3.dll",
-    "libssl-3-arm64.dll",
-    "libssl-3-x64.dll",
-    "python3.dll",
-    "python39.dll",
-    "python310.dll",
-    "python311.dll",
-    "python312.dll",
-    "python313.dll",
-    "python313t.dll",
-    "python314.dll",
-    "python314t.dll",
-    "python315.dll",
-    "python315t.dll",
-    "sqlite3.dll",
-    "tcl86t.dll",
-    "tk86t.dll",
+    // "libcrypto-1_1.dll",
+    // "libcrypto-1_1-x64.dll",
+    // "libcrypto-3.dll",
+    // "libcrypto-3-arm64.dll",
+    // "libcrypto-3-x64.dll",
+    // "libffi-8.dll",
+    // "libssl-1_1.dll",
+    // "libssl-1_1-x64.dll",
+    // "libssl-3.dll",
+    // "libssl-3-arm64.dll",
+    // "libssl-3-x64.dll",
+    // "python3.dll",
+    // "python39.dll",
+    // "python310.dll",
+    // "python311.dll",
+    // "python312.dll",
+    // "python313.dll",
+    // "python313t.dll",
+    // "python314.dll",
+    // "python314t.dll",
+    // "python315.dll",
+    // "python315t.dll",
+    // "sqlite3.dll",
+    // "tcl86t.dll",
+    // "tk86t.dll",
 ];
 
 // CPython 3.14 and ARM64 use a newer version of tcl/tk (8.6.14+) which includes a bundled zlib that
 // dynamically links some system libraries
 const PE_ALLOWED_LIBRARIES_314: &[&str] = &[
-    "zlib1.dll",
+    // "zlib1.dll",
     "api-ms-win-crt-private-l1-1-0.dll", // zlib loads this library on arm64, 3.14+
     "msvcrt.dll",                        // zlib loads this library
 ];
-const PE_ALLOWED_LIBRARIES_ARM64: &[&str] = &["msvcrt.dll", "zlib1.dll"];
+const PE_ALLOWED_LIBRARIES_ARM64: &[&str] = &[
+    "msvcrt.dll",
+    // "zlib1.dll",
+];
 const PE_ALLOWED_LIBRARIES_315: &[&str] = &[
     // See `PE_ALLOWED_LIBRARIES_314` for zlib-related libraries
-    "zlib1.dll",
+    // "zlib1.dll",
     "api-ms-win-crt-private-l1-1-0.dll",
     "msvcrt.dll",
     // `_remote_debugging` loads `ntdll`
@@ -472,12 +480,12 @@ static DARWIN_ALLOWED_DYLIBS: Lazy<Vec<MachOAllowedDylib>> = Lazy::new(|| {
             MachOAllowedDylib {
                 name: "/usr/lib/libedit.3.dylib".to_string(),
                 max_compatibility_version: "2.0.0".try_into().unwrap(),
-                required: true,
+                required: false,
             },
             MachOAllowedDylib {
                 name: "/usr/lib/libncurses.5.4.dylib".to_string(),
                 max_compatibility_version: "5.4.0".try_into().unwrap(),
-                required: true,
+                required: false,
             },
             MachOAllowedDylib {
                 name: "/usr/lib/libobjc.A.dylib".to_string(),
@@ -487,7 +495,7 @@ static DARWIN_ALLOWED_DYLIBS: Lazy<Vec<MachOAllowedDylib>> = Lazy::new(|| {
             MachOAllowedDylib {
                 name: "/usr/lib/libpanel.5.4.dylib".to_string(),
                 max_compatibility_version: "5.4.0".try_into().unwrap(),
-                required: true,
+                required: false,
             },
             MachOAllowedDylib {
                 name: "/usr/lib/libSystem.B.dylib".to_string(),
@@ -705,12 +713,65 @@ static WANTED_WINDOWS_STATIC_PATHS: Lazy<BTreeSet<PathBuf>> = Lazy::new(|| {
         PathBuf::from("python/build/lib/libcrypto_static.lib"),
         PathBuf::from("python/build/lib/liblzma.lib"),
         PathBuf::from("python/build/lib/libssl_static.lib"),
-        PathBuf::from("python/build/lib/sqlite3.lib"),
+        // PathBuf::from("python/build/lib/sqlite3.lib"),
     ]
     .iter()
     .cloned()
     .collect()
 });
+
+const PYSTANDALONE_DISABLED_EXTENSIONS: &[&str] = &[
+    // PYSTANDALONE: All disabled extensions
+    "_crypt",
+    "_ctypes_test",
+    "_curses",
+    "_curses_panel",
+    "_dbm",
+    "_decimal",
+    "_gdbm",
+    "_hmac",
+    "_interpchannels",
+    "_interpqueues",
+    "_interpreters",
+    "_lsprof",
+    "_md5",
+    "_msi",
+    "_multibytecodec",
+    "_multiprocessing",
+    "_remote_debugging",
+    "_sha1",
+    "_sha2",
+    "_sha3",
+    "_sha256",
+    "_sha512",
+    "_sqlite3",
+    "_statistics",
+    "_suggestions",
+    "_symtable",
+    "_testbuffer",
+    "_testcapi",
+    "_testimportmultiple",
+    "_testinternalcapi",
+    "_testmultiphase",
+    "_tkinter",
+    "_xxinterpchannels",
+    "_xxsubinterpreters",
+    "_xxtestfuzz",
+    "audioop",
+    "cmath",
+    "grp",
+    "nis",
+    "ossaudiodev",
+    "parser",
+    "pwd",
+    "readline",
+    "resource",
+    "spwd",
+    "syslog",
+    "winsound",
+    "xxlimited",
+    "xxsubtype",
+];
 
 const GLOBALLY_BANNED_EXTENSIONS: &[&str] = &[
     // Due to linking issues. See comment in cpython.py.
@@ -753,6 +814,7 @@ const GLOBAL_EXTENSIONS: &[&str] = &[
     "_opcode",
     "_operator",
     "_pickle",
+    "_pystandalone",
     "_queue",
     "_random",
     "_sha1",
@@ -1226,6 +1288,19 @@ fn validate_elf<Elf: FileHeader<Endian = Endianness>>(
         }
     }
 
+    if let Some(filename) = path.file_name() {
+        let filename = filename.to_string_lossy();
+
+        if filename.starts_with("python") && !filename.ends_with(".o") {
+            if let None = sections.section_by_name(endian, b".pystandalone") {
+                context.errors.push(format!(
+                    "{} is missing .pystandalone section",
+                    path.display()
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1293,6 +1368,7 @@ fn validate_macho<Mach: MachHeader<Endian = Endianness>>(
     let mut sdk_version = None;
     let mut has_code_signature = false;
     let mut lowest_file_offset = u64::MAX;
+    let mut has_pystandalone_segment = false;
 
     while let Some(load_command) = load_commands.next()? {
         match load_command.variant()? {
@@ -1421,6 +1497,10 @@ fn validate_macho<Mach: MachHeader<Endian = Endianness>>(
                         lowest_file_offset = lowest_file_offset.min(offset);
                     }
                 }
+
+                if segment.name() == "__PYSTANDALONE".as_bytes() {
+                    has_pystandalone_segment = true;
+                }
             }
             LoadCommandVariant::Segment64(segment, segment_data) => {
                 for section in segment.sections(endian, segment_data)? {
@@ -1428,11 +1508,27 @@ fn validate_macho<Mach: MachHeader<Endian = Endianness>>(
                         lowest_file_offset = lowest_file_offset.min(offset);
                     }
                 }
+
+                if segment.name() == "__PYSTANDALONE".as_bytes() {
+                    has_pystandalone_segment = true;
+                }
             }
             LoadCommandVariant::LinkeditData(c) if c.cmd.get(endian) == LC_CODE_SIGNATURE => {
                 has_code_signature = true;
             }
             _ => {}
+        }
+    }
+
+    if let Some(filename) = path.file_name() {
+        let filename = filename.to_string_lossy();
+
+        if filename.starts_with("python") && !filename.ends_with(".o") && !has_pystandalone_segment
+        {
+            context.errors.push(format!(
+                "{} is missing __PYSTANDALONE segment",
+                path.display()
+            ));
         }
     }
 
@@ -1552,6 +1648,26 @@ fn validate_pe<'data, Pe: ImageNtHeaders>(
             context
                 .libpython_exported_symbols
                 .insert(String::from_utf8(symbol.name().to_vec())?);
+        }
+    }
+
+    let mut has_pystandalone_resource = false;
+    if filename.starts_with("python") && filename.ends_with(".exe") {
+        for section in pe.sections() {
+            if section.name()? == ".rsrc" {
+                // Full resource parsing is complex, so just check for the presence of the template bytes
+                let needle: &[u8; 2] = &[0x69, 0x69];
+                if section.data()?.windows(needle.len()).any(|w| w == needle) {
+                    has_pystandalone_resource = true;
+                }
+            }
+        }
+
+        if !has_pystandalone_resource {
+            context.errors.push(format!(
+                "{} is missing pystandalone resource",
+                path.display()
+            ));
         }
     }
 
@@ -1763,6 +1879,11 @@ fn validate_extension_modules(
         wanted.insert("_wmi");
     }
 
+    // PYSTANDALONE: Remove disabled extensions
+    for &disabled in PYSTANDALONE_DISABLED_EXTENSIONS {
+        wanted.remove(disabled);
+    }
+
     for extra in have_extensions.difference(&wanted) {
         errors.push(format!("extra/unknown extension module: {extra}"));
     }
@@ -1822,7 +1943,9 @@ fn validate_json(json: &PythonJsonMain, triple: &str, is_debug: bool) -> Result<
     }
 
     for extension in json.build_info.extensions.keys() {
-        if GLOBALLY_BANNED_EXTENSIONS.contains(&extension.as_str()) {
+        if GLOBALLY_BANNED_EXTENSIONS.contains(&extension.as_str())
+            || PYSTANDALONE_DISABLED_EXTENSIONS.contains(&extension.as_str())
+        {
             errors.push(format!("banned extension detected: {extension}"));
         }
     }
@@ -1887,7 +2010,7 @@ fn validate_distribution(
     };
 
     let is_debug = dist_filename.contains("-debug-");
-    let is_static = dist_filename.contains("+static");
+    let is_static = dist_filename.contains("+static") || dist_filename.contains("-windows-");
 
     let mut tf = crate::open_distribution_archive(dist_path)?;
 
@@ -2086,7 +2209,8 @@ fn validate_distribution(
         }
     }
 
-    if context.libpython_exported_symbols.is_empty() && !is_static {
+    // PYSTANDALONE: on Apple platforms we build libpython in a "hybrid" static way
+    if !triple.contains("-apple-") && context.libpython_exported_symbols.is_empty() && !is_static {
         context
             .errors
             .push("libpython does not export any symbols".to_string());
@@ -2095,7 +2219,7 @@ fn validate_distribution(
     // Ensure that some well known Python symbols are being exported from libpython.
     for symbol in PYTHON_EXPORTED_SYMBOLS {
         let exported = context.libpython_exported_symbols.contains(*symbol);
-        let wanted = !is_static;
+        let wanted = !triple.contains("-apple-") && !is_static;
 
         if exported != wanted {
             context.errors.push(format!(
@@ -2162,6 +2286,9 @@ fn validate_distribution(
                 // But not on Python 3.13 on Windows
                 if triple.contains("-windows-") {
                     matches!(python_major_minor, "3.9" | "3.10" | "3.11" | "3.12")
+                // PYSTANDALONE: also not on Apple platforms
+                } else if triple.contains("-apple-") {
+                    false
                 } else {
                     true
                 }
@@ -2170,6 +2297,9 @@ fn validate_distribution(
                 false
             // Presence of a shared library extension implies no export.
             } else if ext.shared_lib.is_some() {
+                false
+            // PYSTANDALONE: we build in a "hybrid" static way
+            } else if triple.contains("-apple-") {
                 false
             } else {
                 true
@@ -2251,6 +2381,404 @@ fn verify_distribution_behavior(dist_path: &Path) -> Result<Vec<String>> {
 
     if !output.status.success() {
         errors.push("errors running interpreter tests".to_string());
+    }
+
+    errors.extend(
+        verify_pystandalone_behavior(
+            python_exe,
+            temp_dir
+                .path()
+                .join("python")
+                .join(python_json.python_paths.get("stdlib").unwrap()),
+        )?
+        .into_iter(),
+    );
+
+    Ok(errors)
+}
+
+fn create_pystandalone_test_payload(stdlib: PathBuf) -> Result<Vec<u8>> {
+    let mut cursor = Cursor::new(Vec::new());
+
+    let mut library_zip = ZipWriter::new(Cursor::new(Vec::new()));
+    for entry in walkdir::WalkDir::new(&stdlib) {
+        let entry = entry?;
+        let path = entry.path();
+
+        let relative_path = path
+            .strip_prefix(&stdlib)?
+            .to_string_lossy()
+            .replace("\\", "/");
+
+        if path.is_file()
+            && ["abc", "codecs", "encodings", "io", "this"]
+                .iter()
+                .any(|p| relative_path.starts_with(p))
+        {
+            library_zip.start_file(&relative_path, SimpleFileOptions::default())?;
+            library_zip.write_all(&std::fs::read(path)?)?;
+        }
+    }
+    let tmp = library_zip.finish()?;
+
+    cursor.write_all(&(tmp.position() as u32).to_le_bytes())?;
+    cursor.write_all(&tmp.into_inner())?;
+
+    let mut bootstrap_zip = ZipWriter::new(Cursor::new(Vec::new()));
+    bootstrap_zip.start_file("bootstrap.py", SimpleFileOptions::default())?;
+    bootstrap_zip.write(
+        b"import sys; print(sys.argv[1:]); import this; print('Great success!', flush=True)",
+    )?;
+    let tmp = bootstrap_zip.finish()?;
+
+    cursor.write_all(&(tmp.position() as u32).to_le_bytes())?;
+    cursor.write_all(&tmp.into_inner())?;
+
+    Ok(cursor.into_inner())
+}
+
+fn insert_pystandalone_test_payload_macho<Mach: MachHeader<Endian = Endianness>>(
+    header: &Mach,
+    bytes: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>> {
+    let endian = header.endian()?;
+
+    let mut result = bytes.to_vec();
+
+    let mut load_commands = header.load_commands(endian, bytes, 0)?;
+    while let Some(load_command) = load_commands.next()? {
+        match load_command.variant()? {
+            LoadCommandVariant::Segment32(segment, segment_data) => {
+                for section in segment.sections(endian, segment_data)? {
+                    if section.name() == "__pystandalone".as_bytes() {
+                        let (offset, size) = section.file_range(endian).ok_or_else(|| {
+                            anyhow!("could not parse __pystandalone section range")
+                        })?;
+                        if payload.len() > size as usize {
+                            return Err(anyhow!("payload too large for section"));
+                        }
+                        result[offset as usize..(offset as usize + payload.len())]
+                            .copy_from_slice(payload);
+                    }
+                }
+            }
+            LoadCommandVariant::Segment64(segment, segment_data) => {
+                for section in segment.sections(endian, segment_data)? {
+                    if section.name() == "__pystandalone".as_bytes() {
+                        let (offset, size) = section.file_range(endian).ok_or_else(|| {
+                            anyhow!("could not parse __pystandalone section range")
+                        })?;
+                        if payload.len() > size as usize {
+                            return Err(anyhow!("payload too large for section"));
+                        }
+                        result[offset as usize..(offset as usize + payload.len())]
+                            .copy_from_slice(payload);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut tmp = tempfile::NamedTempFile::new()?;
+    tmp.write_all(&result)?;
+    let tmp_path = tmp.into_temp_path();
+
+    // We have to resign the binary after modifying it, annoying
+    duct::cmd(
+        "codesign",
+        ["--sign", "-", "--force", tmp_path.to_str().unwrap()],
+    )
+    .stderr_null()
+    .stdout_null()
+    .run()?;
+
+    result = std::fs::read(&tmp_path)?;
+
+    Ok(result)
+}
+
+fn insert_pystandalone_test_payload_elf<Elf: FileHeader<Endian = Endianness>>(
+    header: &Elf,
+    bytes: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>> {
+    let endian = header.endian()?;
+
+    let mut result = bytes.to_vec();
+
+    let sections = header.sections(endian, bytes)?;
+    if let Some((_, section)) = sections.section_by_name(endian, b".pystandalone") {
+        let (offset, size) = section
+            .file_range(endian)
+            .ok_or_else(|| anyhow!("could not parse .pystandalone section range"))?;
+        if payload.len() > size as usize {
+            return Err(anyhow!("payload too large for section"));
+        }
+        result[offset as usize..(offset as usize + payload.len())].copy_from_slice(payload);
+        return Ok(result);
+    }
+
+    Err(anyhow!("no .pystandalone section found"))
+}
+
+fn insert_pystandalone_test_payload_pe<'data, Pe: ImageNtHeaders>(
+    pe: &PeFile<'data, Pe, &'data [u8]>,
+    bytes: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>> {
+    // File offset of a struct reference that lives inside `bytes`.
+    fn offsetof<T>(base: &[u8], r: &T) -> usize {
+        r as *const T as *const u8 as usize - base.as_ptr() as usize
+    }
+    // Write a little-endian u32 at the given offset.
+    fn w32(buf: &mut [u8], off: usize, val: u32) {
+        buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    let opt = pe.nt_headers().optional_header();
+    let section_alignment = opt.section_alignment() as usize;
+    let file_alignment = opt.file_alignment() as usize;
+
+    let sections = pe.section_table();
+
+    // Find the .rsrc section header and its index.
+    let (rsrc_idx, rsrc_hdr) = sections
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.name == *b".rsrc\0\0\0")
+        .ok_or_else(|| anyhow!("no .rsrc section found"))?;
+    let rsrc_va = rsrc_hdr.virtual_address.get(LE) as usize;
+    let rsrc_vsz = rsrc_hdr.virtual_size.get(LE) as usize;
+    let rsrc_rsz = rsrc_hdr.size_of_raw_data.get(LE) as usize;
+    let rsrc_roff = rsrc_hdr.pointer_to_raw_data.get(LE) as usize;
+
+    // Navigate the resource directory: RT_RCDATA -> ID 1 -> first language leaf.
+    let rsrc_dir = pe
+        .data_directories()
+        .resource_directory(bytes, &sections)?
+        .ok_or_else(|| anyhow!("no resource directory"))?;
+    let root = rsrc_dir.root()?;
+
+    let rcdata_table = root
+        .entries
+        .iter()
+        .find(|e| matches!(e.name_or_id(), ResourceNameOrId::Id(id) if id == RT_RCDATA))
+        .ok_or_else(|| anyhow!("RT_RCDATA type not found"))?
+        .data(rsrc_dir)?
+        .table()
+        .ok_or_else(|| anyhow!("RT_RCDATA is not a directory"))?;
+    let id1_table = rcdata_table
+        .entries
+        .iter()
+        .find(|e| matches!(e.name_or_id(), ResourceNameOrId::Id(1)))
+        .ok_or_else(|| anyhow!("RCDATA ID 1 not found"))?
+        .data(rsrc_dir)?
+        .table()
+        .ok_or_else(|| anyhow!("RCDATA 1 is not a directory"))?;
+    let data_entry = id1_table
+        .entries
+        .first()
+        .ok_or_else(|| anyhow!("no language entries for RCDATA 1"))?
+        .data(rsrc_dir)?
+        .data()
+        .ok_or_else(|| anyhow!("expected data entry at language level"))?;
+
+    let data_rva = data_entry.offset_to_data.get(LE) as usize;
+    let data_size = data_entry.size.get(LE) as usize;
+    let data_sec_off = data_rva - rsrc_va;
+
+    // Verify RCDATA 1 is the last resource (within file-alignment padding of section end).
+    if data_sec_off + data_size + file_alignment < rsrc_rsz {
+        return Err(anyhow!(
+            "RCDATA 1 is not the last resource (ends at {:#x}, section raw size {:#x})",
+            data_sec_off + data_size,
+            rsrc_rsz
+        ));
+    }
+
+    let align_up = |v: usize, a: usize| (v + a - 1) & !(a - 1);
+
+    // Compute new section sizes.
+    let new_content = data_sec_off + payload.len();
+    let new_rsrc_rsz = align_up(new_content, file_alignment);
+    let new_rsrc_vsz = new_content.max(rsrc_vsz);
+    let raw_delta = new_rsrc_rsz as isize - rsrc_rsz as isize;
+    let va_delta = align_up(new_rsrc_vsz, section_alignment) as isize
+        - align_up(rsrc_vsz, section_alignment) as isize;
+
+    // Assemble new file: [pre-payload | payload | padding | post-rsrc].
+    let rsrc_end = rsrc_roff + rsrc_rsz;
+    let mut result = Vec::with_capacity((bytes.len() as isize + raw_delta) as usize);
+    result.extend_from_slice(&bytes[..rsrc_roff + data_sec_off]);
+    result.extend_from_slice(payload);
+    result.resize(rsrc_roff + new_rsrc_rsz, 0);
+    result.extend_from_slice(&bytes[rsrc_end..]);
+
+    // Patch .rsrc section header: VirtualSize and SizeOfRawData.
+    w32(
+        &mut result,
+        offsetof(bytes, &rsrc_hdr.virtual_size),
+        new_rsrc_vsz as u32,
+    );
+    w32(
+        &mut result,
+        offsetof(bytes, &rsrc_hdr.size_of_raw_data),
+        new_rsrc_rsz as u32,
+    );
+
+    // Patch IMAGE_RESOURCE_DATA_ENTRY size field.
+    w32(
+        &mut result,
+        offsetof(bytes, &data_entry.size),
+        payload.len() as u32,
+    );
+
+    // Update resource data directory (index 2) size.
+    if let Some(rd) = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_RESOURCE) {
+        w32(&mut result, offsetof(bytes, &rd.size), new_rsrc_vsz as u32);
+    }
+
+    // Shift sections that follow .rsrc in the file.
+    for (i, sh) in sections.iter().enumerate() {
+        if i <= rsrc_idx {
+            continue;
+        }
+        if raw_delta != 0 {
+            let v = sh.pointer_to_raw_data.get(LE) as isize + raw_delta;
+            w32(
+                &mut result,
+                offsetof(bytes, &sh.pointer_to_raw_data),
+                v as u32,
+            );
+        }
+        if va_delta != 0 {
+            let v = sh.virtual_address.get(LE) as isize + va_delta;
+            w32(&mut result, offsetof(bytes, &sh.virtual_address), v as u32);
+        }
+    }
+
+    // Update data directory RVAs that point into moved sections, and SizeOfImage.
+    if va_delta != 0 {
+        let boundary = rsrc_va + align_up(rsrc_vsz, section_alignment);
+        for dd in pe.data_directories().iter() {
+            let rva = dd.virtual_address.get(LE) as usize;
+            if rva >= boundary {
+                w32(
+                    &mut result,
+                    offsetof(bytes, &dd.virtual_address),
+                    (rva as isize + va_delta) as u32,
+                );
+            }
+        }
+        // SizeOfImage is at optional header + 56 for both PE32 and PE32+.
+        let opt_off = offsetof(bytes, opt);
+        let soi = opt.size_of_image() as isize + va_delta;
+        w32(&mut result, opt_off + 56, soi as u32);
+    }
+
+    // Zero the PE checksum (not validated for non-driver binaries).
+    // CheckSum is at optional header + 64 for both PE32 and PE32+.
+    let opt_off = offsetof(bytes, opt);
+    w32(&mut result, opt_off + 64, 0);
+
+    Ok(result)
+}
+
+fn verify_pystandalone_behavior(python_exe: PathBuf, stdlib: PathBuf) -> Result<Vec<String>> {
+    let mut errors = vec![];
+
+    let payload_data = create_pystandalone_test_payload(stdlib)?;
+
+    // Create a new temporary file so we verify that the executable is not reliant on any of the files and directories in the distribution
+    let temp_dir = tempfile::tempdir()?;
+    let temp_exe = temp_dir.path().join("python_exe");
+
+    let python_exe_vec = std::fs::read(&python_exe)?;
+    let python_exe_data = python_exe_vec.as_slice();
+    if let Ok(kind) = FileKind::parse(python_exe_data) {
+        let new_exe = match kind {
+            FileKind::MachO32 => {
+                let header = MachHeader32::parse(python_exe_data, 0)?;
+                insert_pystandalone_test_payload_macho(
+                    header,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            FileKind::MachO64 => {
+                let header = MachHeader64::parse(python_exe_data, 0)?;
+                insert_pystandalone_test_payload_macho(
+                    header,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            FileKind::Elf32 => {
+                let header = FileHeader32::parse(python_exe_data)?;
+                insert_pystandalone_test_payload_elf(
+                    header,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            FileKind::Elf64 => {
+                let header = FileHeader64::parse(python_exe_data)?;
+                insert_pystandalone_test_payload_elf(
+                    header,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            FileKind::Pe32 => {
+                let file = PeFile32::parse(python_exe_data)?;
+                insert_pystandalone_test_payload_pe(
+                    &file,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            FileKind::Pe64 => {
+                let file = PeFile64::parse(python_exe_data)?;
+                insert_pystandalone_test_payload_pe(
+                    &file,
+                    &python_exe_data,
+                    payload_data.as_slice(),
+                )?
+            }
+            _ => {
+                return Err(anyhow!(
+                    "unsupported binary format for pystandalone test: {:?}",
+                    kind
+                ));
+            }
+        };
+
+        std::fs::write(&temp_exe, &new_exe)?;
+    } else {
+        return Err(anyhow!(
+            "unable to parse binary format for pystandalone test"
+        ));
+    }
+
+    eprintln!("  running pystandalone tests");
+    let output = duct::cmd(&temp_exe, ["some-argument"])
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .context(format!("Failed to run `{}`", temp_exe.display()))?;
+
+    if !output.status.success() {
+        errors.push("errors running pystandalone tests".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains("some-argument")
+        || !stdout.contains("The Zen of Python, by Tim Peters")
+        || !stdout.contains("Great success!")
+    {
+        errors.push(format!("unexpected output from pystandalone test"));
     }
 
     Ok(errors)

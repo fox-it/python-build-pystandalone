@@ -16,6 +16,7 @@ PIP = VENV / "bin" / "pip"
 PYTHON = VENV / "bin" / "python"
 REQUIREMENTS = ROOT / "requirements.txt"
 MAKE_DIR = ROOT / "cpython-unix"
+PYSTANDALONE_DIR = ROOT / "pystandalone"
 
 
 def bootstrap():
@@ -40,7 +41,7 @@ def run():
 
     args = [
         str(PYTHON),
-        "build-main.py",
+        str(PYSTANDALONE_DIR / "build.py"),
         *sys.argv[1:],
     ]
 

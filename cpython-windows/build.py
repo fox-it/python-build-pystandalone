@@ -24,7 +24,17 @@ from pythonbuild.cpython import (
     parse_config_c,
 )
 from pythonbuild.downloads import DOWNLOADS
+from pythonbuild.logging import LOG_FH, log, set_logger
+from pythonbuild.static import (
+    add_to_config_c,
+    convert_to_static_library,
+    copy_link_to_lib,
+    hack_source_files,
+    remove_from_config_c,
+    remove_from_extension_modules,
+)
 from pythonbuild.utils import (
+    NoSearchStringError,
     compress_python_archive,
     create_tar_from_directory,
     download_entry,
@@ -32,6 +42,7 @@ from pythonbuild.utils import (
     extract_zip_to_directory,
     normalize_tar_archive,
     release_tag_from_git,
+    static_replace_in_file,
     validate_python_json,
 )
 
@@ -39,9 +50,7 @@ ROOT = pathlib.Path(os.path.abspath(__file__)).parent.parent
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
 SUPPORT = ROOT / "cpython-windows"
-
-LOG_PREFIX = [None]
-LOG_FH = [None]
+PYSTANDALONE = ROOT / "pystandalone"
 
 # Extensions that need to be converted from standalone to built-in.
 # Key is name of VS project representing the standalone extension.
@@ -56,6 +65,7 @@ CONVERT_TO_BUILTIN_EXTENSIONS = {
     "_bz2": {},
     "_ctypes": {
         "shared_depends": ["libffi-8"],
+        "static_depends_no_project": ["libffi"],
     },
     "_decimal": {},
     "_elementtree": {},
@@ -65,6 +75,7 @@ CONVERT_TO_BUILTIN_EXTENSIONS = {
     },
     "_lzma": {
         "ignore_additional_depends": {"$(OutDir)liblzma$(PyDebugExt).lib"},
+        "static_depends": ["liblzma"],
     },
     "_msi": {
         # Removed in 3.13.
@@ -72,19 +83,26 @@ CONVERT_TO_BUILTIN_EXTENSIONS = {
     },
     "_overlapped": {},
     "_multiprocessing": {},
+    # PYSTANDALONE: add our module
+    "_pystandalone": {
+        "shared_depends_amd64": ["libcrypto-1_1-x64"],
+        "shared_depends_win32": ["libcrypto-1_1"],
+    },
     "_remote_debugging": {
         # Added in 3.14
         "ignore_missing": True
     },
     "_socket": {},
-    "_sqlite3": {"shared_depends": ["sqlite3"]},
+    "_sqlite3": {"shared_depends": ["sqlite3"], "static_depends": ["sqlite3"]},
     # See the one-off calls to copy_link_to_lib() and elsewhere to hack up
     # project files.
     "_ssl": {
         "shared_depends_amd64": ["libcrypto-1_1-x64", "libssl-1_1-x64"],
         "shared_depends_win32": ["libcrypto-1_1", "libssl-1_1"],
+        "static_depends_no_project": ["libcrypto_static", "libssl_static"],
     },
     "_tkinter": {
+        "ignore_static": True,
         "shared_depends": ["tcl86t", "tk86t"],
     },
     "_queue": {},
@@ -112,6 +130,12 @@ REQUIRED_EXTENSIONS = {
     "_tracemalloc",
     "_weakref",
     "faulthandler",
+}
+
+DISABLED_EXTENSIONS = {
+    ext
+    for line in (PYSTANDALONE / "disabled-modules").read_text().splitlines()
+    if (ext := line.strip()) and not line.startswith("#")
 }
 
 # Used to annotate licenses.
@@ -181,21 +205,6 @@ PGO_TESTS = {
     "test_xml_etree",
     "test_xml_etree_c",
 }
-
-
-def log(msg):
-    if isinstance(msg, bytes):
-        msg_str = msg.decode("utf-8", "replace")
-        msg_bytes = msg
-    else:
-        msg_str = msg
-        msg_bytes = msg.encode("utf-8", "replace")
-
-    print("%s> %s" % (LOG_PREFIX[0], msg_str))
-
-    if LOG_FH[0]:
-        LOG_FH[0].write(msg_bytes + b"\n")
-        LOG_FH[0].flush()
 
 
 def exec_and_log(args, cwd, env, exit_on_error=True):
@@ -282,31 +291,6 @@ def find_vcvarsall_path(msvc_version):
     return find_vs_path(
         pathlib.Path("VC") / "Auxiliary" / "Build" / "vcvarsall.bat", msvc_version
     )
-
-
-class NoSearchStringError(Exception):
-    """Represents a missing search string when replacing content in a file."""
-
-
-def static_replace_in_file(p: pathlib.Path, search, replace):
-    """Replace occurrences of a string in a file.
-
-    The updated file contents are written out in place.
-    """
-
-    with p.open("rb") as fh:
-        data = fh.read()
-
-    # Build should be as deterministic as possible. Assert that wanted changes
-    # actually occur.
-    if search not in data:
-        raise NoSearchStringError("search string (%s) not in %s" % (search, p))
-
-    log("replacing `%s` with `%s` in %s" % (search, replace, p))
-    data = data.replace(search, replace)
-
-    with p.open("wb") as fh:
-        fh.write(data)
 
 
 OPENSSL_PROPS_REMOVE_RULES_LEGACY = b"""
@@ -460,28 +444,30 @@ def hack_props(
     # OpenSSL build. This requires some hacking of various files.
     openssl_props = pcbuild_path / "openssl.props"
 
-    if arch == "amd64":
-        suffix = b"-x64"
-    elif arch == "win32":
-        suffix = b""
-    elif arch == "arm64":
-        suffix = b""
-    else:
-        raise Exception("unhandled architecture: %s" % arch)
-
+    # We don't need the install rules to copy the libcrypto and libssl DLLs.
     try:
-        # CPython 3.11+ builds with OpenSSL 3.x by default.
         static_replace_in_file(
             openssl_props,
-            b"<_DLLSuffix>-3</_DLLSuffix>",
-            b"<_DLLSuffix>-3%s</_DLLSuffix>" % suffix,
+            OPENSSL_PROPS_REMOVE_RULES.strip().replace(b"\n", b"\r\n"),
+            b"",
         )
     except NoSearchStringError:
         static_replace_in_file(
             openssl_props,
-            b"<_DLLSuffix>-1_1</_DLLSuffix>",
-            b"<_DLLSuffix>-1_1%s</_DLLSuffix>" % suffix,
+            OPENSSL_PROPS_REMOVE_RULES_LEGACY.strip().replace(b"\n", b"\r\n"),
+            b"",
         )
+
+    # We need to copy linking settings for dynamic libraries to static libraries.
+    copy_link_to_lib(pcbuild_path / "libffi.props")
+    copy_link_to_lib(pcbuild_path / "openssl.props")
+
+    # We should link against the static library variants.
+    static_replace_in_file(
+        openssl_props,
+        b"libcrypto.lib;libssl.lib;",
+        b"libcrypto_static.lib;libssl_static.lib;",
+    )
 
     libffi_props = pcbuild_path / "libffi.props"
 
@@ -499,6 +485,29 @@ def hack_props(
         )
     except NoSearchStringError:
         pass
+
+    # For some reason the built .lib doesn't have the -8 suffix in
+    # static build mode. This is possibly a side-effect of CPython's
+    # libffi build script not officially supporting static-only builds.
+    static_replace_in_file(
+        libffi_props,
+        b"<AdditionalDependencies>libffi-8.lib;%(AdditionalDependencies)</AdditionalDependencies>",
+        b"<AdditionalDependencies>libffi.lib;%(AdditionalDependencies)</AdditionalDependencies>",
+    )
+
+    static_replace_in_file(
+        libffi_props, LIBFFI_PROPS_REMOVE_RULES.strip().replace(b"\n", b"\r\n"), b""
+    )
+
+    # Add library search path so the <Lib> section can find libffi.lib.
+    # The <Lib> section was created by copy_link_to_lib() above but without
+    # AdditionalLibraryDirectories, so lib.exe can't find libffi.lib in
+    # $(libffiOutDir).
+    static_replace_in_file(
+        libffi_props,
+        b"<AdditionalDependencies>libffi.lib;%(AdditionalDependencies)</AdditionalDependencies>\r\n    </Lib>",
+        b"<AdditionalDependencies>libffi.lib;%(AdditionalDependencies)</AdditionalDependencies>\r\n      <AdditionalLibraryDirectories>$(libffiOutDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>\r\n    </Lib>",
+    )
 
 
 def hack_project_files(
@@ -680,6 +689,9 @@ def hack_project_files(
     static_replace_in_file(
         pcbuild_proj, b'<Projects Include="pyshellext.vcxproj" />', b""
     )
+    static_replace_in_file(
+        pcbuild_proj, b'<Projects Include="python3dll.vcxproj" />', b""
+    )
 
     # Ditto for freeze_importlib, which isn't needed since we don't modify
     # the frozen importlib baked into the source distribution (
@@ -689,29 +701,191 @@ def hack_project_files(
     # we attempt to disable this project there we get a build failure due to
     # a missing /Python/frozen_modules/getpath.h file. So we skip this on
     # newer Python.
-    try:
-        static_replace_in_file(
-            pcbuild_proj,
-            b"""<Projects2 Condition="$(Platform) != 'ARM' and $(Platform) != 'ARM64'" Include="_freeze_importlib.vcxproj" />""",
-            b"",
+    # PYSTANDALONE: we do need to regenerate frozen modules
+    # try:
+    #     static_replace_in_file(
+    #         pcbuild_proj,
+    #         b"""<Projects2 Condition="$(Platform) != 'ARM' and $(Platform) != 'ARM64'" Include="_freeze_importlib.vcxproj" />""",
+    #         b"",
+    #     )
+    # except NoSearchStringError:
+    #     pass
+
+    # Python 3.11 removed various redundant ffi_* symbol definitions as part of commit
+    # 38f331d4656394ae0f425568e26790ace778e076. We were relying on these symbol
+    # definitions in older Python versions. (See also our commit
+    # c3fa21f89c696bc17aec686dee2d13969cca7aa2 for some history with treatment of libffi
+    # linkage.)
+    #
+    # Here, we add FFI_BUILDING to the preprocessor. This feeds into libffi's ffi.h in
+    # order to set up symbol / linkage __declspec fu properly in static builds.
+    if meets_python_minimum_version(python_version, "3.11"):
+        ctypes_path = pcbuild_path / "_ctypes.vcxproj"
+        try:
+            static_replace_in_file(
+                ctypes_path,
+                b"<PreprocessorDefinitions>USING_MALLOC_CLOSURE_DOT_C=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>",
+                b"<PreprocessorDefinitions>USING_MALLOC_CLOSURE_DOT_C=1;FFI_BUILDING;%(PreprocessorDefinitions)</PreprocessorDefinitions>",
+            )
+        except NoSearchStringError:
+            pass
+
+    pythoncore_proj = pcbuild_path / "pythoncore.vcxproj"
+
+    for extension, entry in sorted(CONVERT_TO_BUILTIN_EXTENSIONS.items()):
+        if entry.get("ignore_static") or extension in DISABLED_EXTENSIONS:
+            log("ignoring extension %s in static builds" % extension)
+            continue
+
+        init_fn = entry.get("init", "PyInit_%s" % extension)
+
+        if convert_to_static_library(cpython_source_path, extension, entry, False):
+            add_to_config_c(cpython_source_path, extension, init_fn)
+
+    # pythoncore.vcxproj produces libpython. Typically pythonXY.dll. We change
+    # it to produce a static library.
+    pyproject_props = pcbuild_path / "pyproject.props"
+
+    # Need to replace Py_ENABLE_SHARED with Py_NO_ENABLE_SHARED so symbol
+    # visibility is proper.
+
+    # Replacing it in the global properties file has the most bang for our buck.
+    static_replace_in_file(
+        pyproject_props,
+        b"<PreprocessorDefinitions>WIN32;",
+        b"<PreprocessorDefinitions>Py_NO_ENABLE_SHARED;WIN32;",
+    )
+
+    static_replace_in_file(pythoncore_proj, b"Py_ENABLE_SHARED", b"Py_NO_ENABLE_SHARED")
+
+    # Disable whole program optimization because it interferes with the format
+    # of object files and makes it so we can't easily consume their symbols.
+    # TODO this /might/ be OK once we figure out symbol exporting issues.
+    static_replace_in_file(
+        pyproject_props,
+        b"<WholeProgramOptimization>true</WholeProgramOptimization>",
+        b"<WholeProgramOptimization>false</WholeProgramOptimization>",
+    )
+
+    # Make libpython a static library and disable linker warnings for duplicate symbols.
+    static_replace_in_file(
+        pythoncore_proj,
+        b"<ConfigurationType>DynamicLibrary</ConfigurationType>",
+        b"<ConfigurationType>StaticLibrary</ConfigurationType>",
+    )
+
+    copy_link_to_lib(pythoncore_proj)
+
+    # Add /IGNORE:4006 to suppress duplicate symbol warnings from merging
+    # static libraries.  We search for the closing </Lib> tag which was
+    # generated by copy_link_to_lib() above.
+    static_replace_in_file(
+        pythoncore_proj,
+        b"    </Lib>",
+        b"      <AdditionalOptions>/IGNORE:4006</AdditionalOptions>\r\n    </Lib>",
+    )
+
+    # Switch to the static version of the run-time library.
+    static_replace_in_file(
+        pyproject_props,
+        b"<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>",
+        b"<RuntimeLibrary>MultiThreaded</RuntimeLibrary>",
+    )
+    static_replace_in_file(
+        pyproject_props,
+        b"<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>",
+        b"<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>",
+    )
+
+
+def hack_pystandalone_files(source_path: pathlib.Path, python_version: str):
+    # PYSTANDALONE: remove disabled modules from config.c
+    for ext in DISABLED_EXTENSIONS:
+        remove_from_config_c(source_path, ext)
+        remove_from_extension_modules(source_path, ext)
+
+    # PYSTANDALONE: copy pystandalone source
+    log("copying pystandalone source files")
+    for path in (src := PYSTANDALONE / "src").rglob("*"):
+        if path.is_dir():
+            continue
+        shutil.copyfile(path, source_path / path.relative_to(src))
+
+    # PYSTANDALONE: add pystandalone module to config.c
+    add_to_config_c(source_path, "_pystandalone", "PyInit__pystandalone")
+
+    # PYSTANDALONE: apply patches to Python source
+    python_major_minor_version = python_version.rsplit(".", 1)[0]
+    if (
+        patch_file := PYSTANDALONE
+        / "patch"
+        / ("cpython-%s.patch" % python_major_minor_version)
+    ).exists():
+        log("applying patch %s" % patch_file.name)
+        subprocess.run(
+            ["git.exe", "apply", "-C1", str(patch_file)],
+            cwd=source_path,
+            check=True,
+            bufsize=0,
         )
-    except NoSearchStringError:
-        pass
+
+    if (
+        patch_file := PYSTANDALONE
+        / "patch"
+        / ("cpython-%s-windows.patch" % python_major_minor_version)
+    ).exists():
+        log("applying patch %s" % patch_file.name)
+        subprocess.run(
+            ["git.exe", "apply", "-C1", str(patch_file)],
+            cwd=source_path,
+            check=True,
+            bufsize=0,
+        )
+
+    # PYSTANDALONE: run argument clinic
+    log("running Argument Clinic")
+    subprocess.run(
+        [
+            sys.executable,
+            str(source_path / "Tools" / "clinic" / "clinic.py"),
+            "--make",
+            "--srcdir",
+            str(source_path),
+        ],
+        cwd=source_path,
+        check=True,
+        bufsize=0,
+    )
+
+    if meets_python_minimum_version(python_version, "3.12"):
+        # PYSTANDALONE: run regen-global-objects
+        log("running regen-global-objects")
+        subprocess.run(
+            [
+                sys.executable,
+                str(source_path / "Tools" / "build" / "generate_global_objects.py"),
+            ],
+            cwd=source_path,
+            check=True,
+            bufsize=0,
+        )
 
 
 def run_msbuild(
     msbuild: pathlib.Path,
     pcbuild_path: pathlib.Path,
+    target: str,
     configuration: str,
     platform: str,
     python_version: str,
     windows_sdk_version: str,
     freethreaded: bool,
+    exit_on_error: bool = True,
 ):
     args = [
         str(msbuild),
         str(pcbuild_path / "pcbuild.proj"),
-        "/target:Build",
+        "/target:%s" % target,
         "/property:Configuration=%s" % configuration,
         "/property:Platform=%s" % platform,
         "/maxcpucount",
@@ -719,8 +893,9 @@ def run_msbuild(
         "/verbosity:normal",
         "/property:IncludeExternals=true",
         "/property:IncludeSSL=true",
-        "/property:IncludeTkinter=true",
-        "/property:IncludeTests=true",
+        # PYSTANDALONE: disable
+        "/property:IncludeTkinter=false",
+        "/property:IncludeTests=false",
         "/property:OverrideVersion=%s" % python_version,
         "/property:IncludeCTypes=true",
         # We pin the Windows 10 SDK version to make builds more deterministic.
@@ -732,7 +907,7 @@ def run_msbuild(
     if freethreaded:
         args.append("/property:DisableGil=true")
 
-    exec_and_log(args, str(pcbuild_path), os.environ)
+    exec_and_log(args, str(pcbuild_path), os.environ, exit_on_error)
 
 
 def build_openssl_for_arch(
@@ -810,6 +985,9 @@ def build_openssl_for_arch(
             "CFLAGS": env.get("CFLAGS", "") + " /FS",
         },
     )
+
+    # Switch OpenSSL to the static C runtime for static Python builds.
+    static_replace_in_file(source_root / "Makefile", b"/MD", b"/MT")
 
     # exec_and_log(["nmake"], source_root, env)
     exec_and_log(
@@ -963,13 +1141,44 @@ def build_libffi(
             / "PCbuild"
             / "prepare_libffi.bat"
         )
+        # We replace FFI_BUILDING_DLL with FFI_BUILDING so
+        # declspec(dllexport) isn't used.
+        # We add USE_STATIC_RTL to force static linking of the crt.
+        static_replace_in_file(
+            prepare_libffi,
+            b"CPPFLAGS='-DFFI_BUILDING_DLL'",
+            b"CPPFLAGS='-DFFI_BUILDING -DUSE_STATIC_RTL'",
+        )
+
+        # We also need to tell configure to only build a static library.
+        static_replace_in_file(
+            prepare_libffi,
+            b"--build=$BUILD --host=$HOST;",
+            b"--build=$BUILD --host=$HOST --disable-shared;",
+        )
+
+        # Remove references to copying .dll and .pdb files.
+        try:
+            static_replace_in_file(
+                prepare_libffi,
+                b"copy %ARTIFACTS%\.libs\libffi-*.dll %_LIBFFI_OUT% || exit /B 1",
+                b"",
+            )
+            static_replace_in_file(
+                prepare_libffi,
+                b"copy %ARTIFACTS%\.libs\libffi-*.lib %_LIBFFI_OUT% || exit /B 1",
+                b"",
+            )
+        except NoSearchStringError:
+            # This patch is only needed on CPython 3.9+.
+            pass
 
         env = dict(os.environ)
         env["LIBFFI_SOURCE"] = str(ffi_source_path)
         env["VCVARSALL"] = str(find_vcvarsall_path(msvc_version))
         env["SH"] = str(sh_exe)
 
-        args = [str(prepare_libffi), "-pdb"]
+        args = [str(prepare_libffi)]
         if arch == "x86":
             args.append("-x86")
             artifacts_path = ffi_source_path / "i686-pc-cygwin"
@@ -1047,8 +1256,12 @@ def collect_python_build_artifacts(
         # We don't care about build artifacts for the python executable.
         "python",
         "pythonw",
+        # PYSTANDALONE: we need this for building but don't care about the build artifacts
+        "_freeze_importlib",
         # Used to bootstrap interpreter.
         "_freeze_module",
+        # Removed from static builds (no DLL).
+        "python3dll",
         # Don't care about venvlauncher executable.
         "venvlauncher",
         "venvwlauncher",
@@ -1070,7 +1283,6 @@ def collect_python_build_artifacts(
     }
 
     other_projects = {"pythoncore"}
-    other_projects.add("python3dll")
 
     # Projects providing dependencies.
     depends_projects = set()
@@ -1081,6 +1293,9 @@ def collect_python_build_artifacts(
     dirs = {p for p in os.listdir(intermediates_path)}
 
     for extension, entry in CONVERT_TO_BUILTIN_EXTENSIONS.items():
+        if extension in DISABLED_EXTENSIONS:
+            continue
+
         if extension not in dirs:
             if entry.get("ignore_missing"):
                 continue
@@ -1089,11 +1304,7 @@ def collect_python_build_artifacts(
                 sys.exit(1)
 
         extension_projects.add(extension)
-
-    depends_projects |= {
-        "liblzma",
-        "sqlite3",
-    }
+        depends_projects |= set(entry.get("static_depends", []))
 
     if zlib_entry == "zlib-ng":
         depends_projects |= {"zlib-ng"}
@@ -1175,7 +1386,7 @@ def collect_python_build_artifacts(
     res["inittab_source"] = "build/core/config.c"
     res["inittab_cflags"] = ["-DNDEBUG", "-DPy_BUILD_CORE"]
 
-    exts = ("lib", "exp")
+    exts = ("lib",)
 
     for ext in exts:
         source = outputs_path / ("python%s%s.%s" % (python_majmin, lib_suffix, ext))
@@ -1183,7 +1394,7 @@ def collect_python_build_artifacts(
         log("copying %s" % source)
         shutil.copyfile(source, dest)
 
-    res["core"]["shared_lib"] = "install/python%s%s.dll" % (python_majmin, lib_suffix)
+    res["core"]["static_lib"] = "build/core/python%s.lib" % python_majmin
 
     # We hack up pythoncore.vcxproj and the list in it when this function
     # runs isn't totally accurate. We hardcode the list from the CPython
@@ -1226,16 +1437,16 @@ def collect_python_build_artifacts(
         for obj in process_project(ext, dest_dir):
             entry["objs"].append("build/extensions/%s/%s" % (ext, obj))
 
-        for lib in CONVERT_TO_BUILTIN_EXTENSIONS.get(ext, {}).get("shared_depends", []):
+        for lib in CONVERT_TO_BUILTIN_EXTENSIONS.get(ext, {}).get("static_depends", []):
             entry["links"].append(
-                {"name": lib, "path_dynamic": "install/DLLs/%s.dll" % lib}
+                {"name": lib, "path_static": "build/lib/%s.lib" % lib}
             )
 
         for lib in CONVERT_TO_BUILTIN_EXTENSIONS.get(ext, {}).get(
-            "shared_depends_%s" % arch, []
+            "static_depends_no_project", []
         ):
             entry["links"].append(
-                {"name": lib, "path_dynamic": "install/DLLs/%s.dll" % lib}
+                {"name": lib, "path_static": "build/lib/%s.lib" % lib}
             )
 
         if ext in EXTENSION_TO_LIBRARY_DOWNLOADS_ENTRY:
@@ -1275,7 +1486,8 @@ def collect_python_build_artifacts(
         log("copying static extension %s" % ext_static)
         shutil.copyfile(ext_static, dest)
 
-        res["extensions"][ext][0]["shared_lib"] = "install/DLLs/%s%s.pyd" % (
+        res["extensions"][ext][0]["static_lib"] = "build/extensions/%s/%s%s.lib" % (
+            ext,
             ext,
             abi_tag,
         )
@@ -1334,8 +1546,9 @@ def build_cpython(
     xz_archive = download_entry("xz", BUILD)
     zlib_archive = download_entry(zlib_entry, BUILD)
 
-    setuptools_wheel = download_entry("setuptools", BUILD)
-    pip_wheel = download_entry("pip", BUILD)
+    # PYSTANDALONE: we don't use these
+    # setuptools_wheel = download_entry("setuptools", BUILD)
+    # pip_wheel = download_entry("pip", BUILD)
 
     # On CPython 3.14+, we use the latest tcl/tk version which has additional
     # runtime dependencies, so we are conservative and use the old version
@@ -1414,22 +1627,6 @@ def build_cpython(
 
         extract_tar_to_directory(libffi_archive, td)
 
-        # We need all the OpenSSL library files in the same directory to appease
-        # install rules.
-        openssl_arch = {"amd64": "amd64", "x86": "win32", "arm64": "arm64"}[arch]
-        openssl_root = td / "openssl" / openssl_arch
-        openssl_bin_path = openssl_root / "bin"
-        openssl_lib_path = openssl_root / "lib"
-
-        for f in sorted(os.listdir(openssl_bin_path)):
-            if not f.startswith("lib"):
-                continue
-
-            source = openssl_bin_path / f
-            dest = openssl_lib_path / f
-            log("copying %s to %s" % (source, dest))
-            shutil.copyfile(source, dest)
-
         # Delete the tk nmake helper, it's not needed and links msvc
         if tk_bin_entry == "tk-windows-bin":
             tcltk_commit: str = DOWNLOADS[tk_bin_entry]["git_commit"]
@@ -1458,6 +1655,8 @@ def build_cpython(
 
         builtin_extensions = parse_config_c(config_c)
 
+        # PYSTANDALONE: apply our patches first since they include some project files.
+        hack_pystandalone_files(cpython_source_path, python_version=python_version)
         hack_project_files(
             td,
             cpython_source_path,
@@ -1466,11 +1665,24 @@ def build_cpython(
             zlib_entry=zlib_entry,
             arch=arch,
         )
+        hack_source_files(cpython_source_path, python_version=python_version)
+
+        # CPython 3.13+ renamed PC/pyconfig.h to PC/pyconfig.h.in and
+        # generates pyconfig.h at build time via the _UpdatePyconfig target
+        # in pythoncore.vcxproj.  Since we reorder extensions to build
+        # before pythoncore, pyconfig.h does not exist yet when extensions
+        # compile.  Pre-generate it so the PC/ include-path entry works.
+        pyconfig_h = cpython_source_path / "PC" / "pyconfig.h"
+        pyconfig_h_in = cpython_source_path / "PC" / "pyconfig.h.in"
+        if not pyconfig_h.exists() and pyconfig_h_in.exists():
+            log("pre-generating PC/pyconfig.h from PC/pyconfig.h.in")
+            pyconfig_h.write_bytes(pyconfig_h_in.read_bytes())
 
         if pgo:
             run_msbuild(
                 msbuild,
                 pcbuild_path,
+                target="Build",
                 configuration="PGInstrument",
                 platform=build_platform,
                 python_version=python_version,
@@ -1537,6 +1749,18 @@ def build_cpython(
             run_msbuild(
                 msbuild,
                 pcbuild_path,
+                target="Build",
+                configuration="PGUpdate",
+                platform=build_platform,
+                python_version=python_version,
+                windows_sdk_version=windows_sdk_version,
+                freethreaded=freethreaded,
+                exit_on_error=False,
+            )
+            run_msbuild(
+                msbuild,
+                pcbuild_path,
+                target="Rebuild",
                 configuration="PGUpdate",
                 platform=build_platform,
                 python_version=python_version,
@@ -1549,6 +1773,19 @@ def build_cpython(
             run_msbuild(
                 msbuild,
                 pcbuild_path,
+                target="Build",
+                configuration="Release",
+                platform=build_platform,
+                python_version=python_version,
+                windows_sdk_version=windows_sdk_version,
+                freethreaded=freethreaded,
+                exit_on_error=False,
+            )
+            # PYSTANDALONE: remake python due to changes to frozen zipimport
+            run_msbuild(
+                msbuild,
+                pcbuild_path,
+                target="Rebuild",
                 configuration="Release",
                 platform=build_platform,
                 python_version=python_version,
@@ -1593,7 +1830,7 @@ def build_cpython(
         if not meets_python_minimum_version(python_version, "3.12"):
             args.append("--include-distutils")
 
-        args.extend(["--include-idle", "--include-stable", "--include-tcltk"])
+        args.append("--flat-dlls")
 
         exec_and_log(
             args,
@@ -1601,59 +1838,62 @@ def build_cpython(
             os.environ,
         )
 
+        # PYSTANDALONE: skip pip/setuptools installation
+
         # We install pip by using pip to install itself. This leverages a feature
         # where Python can automatically recognize wheel/zip files on sys.path and
         # import their contents. According to
         # https://github.com/pypa/pip/issues/11146 running pip from a wheel is not
         # supported. But it has historically worked and is simple. So do this until
         # it stops working and we need to switch to running pip from the filesystem.
-        pip_env = dict(os.environ)
-        pip_env["PYTHONPATH"] = str(pip_wheel)
+        # pip_env = dict(os.environ)
+        # pip_env["PYTHONPATH"] = str(pip_wheel)
 
         # Install pip and setuptools.
-        exec_and_log(
-            [
-                str(install_dir / python_exe),
-                "-m",
-                "pip",
-                "install",
-                "--no-cache-dir",
-                "--no-index",
-                str(pip_wheel),
-            ],
-            td,
-            pip_env,
-        )
+        # exec_and_log(
+        #     [
+        #         str(install_dir / python_exe),
+        #         "-m",
+        #         "pip",
+        #         "install",
+        #         "--no-cache-dir",
+        #         "--no-index",
+        #         str(pip_wheel),
+        #     ],
+        #     td,
+        #     pip_env,
+        # )
 
         # Setuptools is only installed for Python 3.11 and older, for parity with
         # `ensurepip` and `venv`: https://github.com/python/cpython/pull/101039
-        if meets_python_maximum_version(python_version, "3.11"):
-            exec_and_log(
-                [
-                    str(install_dir / python_exe),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--no-cache-dir",
-                    "--no-index",
-                    str(setuptools_wheel),
-                ],
-                td,
-                pip_env,
-            )
+        # if meets_python_maximum_version(python_version, "3.11"):
+        #     exec_and_log(
+        #         [
+        #             str(install_dir / python_exe),
+        #             "-m",
+        #             "pip",
+        #             "install",
+        #             "--no-cache-dir",
+        #             "--no-index",
+        #             str(setuptools_wheel),
+        #         ],
+        #         td,
+        #         pip_env,
+        #     )
 
         # The executables in the Scripts/ directory don't work because they reference
         # python.dll in the wrong path. You can run these via e.g. `python.exe -m pip`.
         # So just delete them for now.
-        for filename in sorted(os.listdir(install_dir / "Scripts")):
-            assert filename.startswith("pip") and filename.endswith(".exe")
-            p = install_dir / "Scripts" / filename
-            log("removing non-functional executable: %s" % p)
-            os.unlink(p)
+        # for filename in sorted(os.listdir(install_dir / "Scripts")):
+        #     assert filename.startswith("pip") and filename.endswith(".exe")
+        #     p = install_dir / "Scripts" / filename
+        #     log("removing non-functional executable: %s" % p)
+        #     os.unlink(p)
 
         # But this leaves the Scripts directory empty, which we don't want. So
         # create a placeholder file to ensure the directory is created on archive
         # extract.
+        (install_dir / "Scripts").mkdir(exist_ok=True)
         with (install_dir / "Scripts" / ".empty").open("ab"):
             pass
 
@@ -1670,6 +1910,10 @@ def build_cpython(
         )
 
         for ext, init_fn in sorted(builtin_extensions.items()):
+            # PYSTANDALONE: skip modules we explicitly disabled
+            if ext in DISABLED_EXTENSIONS:
+                continue
+
             if ext in build_info["extensions"]:
                 log("built-in extension should not have a build entry: %s" % ext)
                 sys.exit(1)
@@ -1690,9 +1934,15 @@ def build_cpython(
             for record in entries:
                 record["required"] = extension in REQUIRED_EXTENSIONS
 
+        # Copy libffi static library as a one-off.
+        source = td / "libffi" / "libffi.lib"
+        dest = out_dir / "python" / "build" / "lib" / "libffi.lib"
+        log("copying %s to %s" % (source, dest))
+        shutil.copyfile(source, dest)
+
         # Copy OpenSSL libraries as a one-off.
         for lib in ("crypto", "ssl"):
-            name = "lib%s.lib" % lib
+            name = "lib%s_static.lib" % lib
 
             source = td / "openssl" / build_directory / "lib" / name
             dest = out_dir / "python" / "build" / "lib" / name
@@ -1736,13 +1986,15 @@ def build_cpython(
             if f.startswith("LICENSE.") and f.endswith(".txt"):
                 shutil.copyfile(ROOT / f, licenses_dir / f)
 
-        extension_module_loading = ["builtin", "shared-library"]
+        # Static builds do not support loading extension modules, since Python
+        # symbols are not exported.
+        extension_module_loading = ["builtin"]
 
         # Patches to CPython above (search for __declspec) always force
         # __declspec(dllexport), even for static distributions.
         python_symbol_visibility = "dllexport"
 
-        crt_features = ["vcruntime:140"]
+        crt_features = ["static"]
 
         if pgo:
             optimizations = "pgo"
@@ -1760,7 +2012,7 @@ def build_cpython(
             "python_symbol_visibility": python_symbol_visibility,
             "python_stdlib_test_packages": sorted(STDLIB_TEST_PACKAGES),
             "python_extension_module_loading": extension_module_loading,
-            "libpython_link_mode": "shared",
+            "libpython_link_mode": "static",
             "crt_features": crt_features,
             "build_info": build_info,
             "licenses": entry["licenses"],
@@ -1786,16 +2038,6 @@ def build_cpython(
             metadata = json.load(fh)
 
         python_info.update(metadata)
-
-        python_info["tcl_library_path"] = "install/tcl"
-        python_info["tcl_library_paths"] = [
-            "dde1.4",
-            "reg1.3",
-            "tcl8.6",
-            "tk8.6",
-            "tcl8",
-            "tix8.4.3",
-        ]
 
         validate_python_json(python_info, extension_modules=None)
 
@@ -1883,7 +2125,7 @@ def main() -> None:
     log_path = BUILD / "build.log"
 
     with log_path.open("wb") as log_fh:
-        LOG_FH[0] = log_fh
+        set_logger(None, log_fh)
 
         if os.environ.get("Platform") == "x86":
             target_triple = "i686-pc-windows-msvc"
@@ -1912,7 +2154,7 @@ def main() -> None:
         )
         if not openssl_archive.exists():
             perl_path = fetch_strawberry_perl() / "perl" / "bin" / "perl.exe"
-            LOG_PREFIX[0] = "openssl"
+            set_logger("openssl", LOG_FH[0])
             build_openssl(
                 openssl_entry,
                 perl_path,
@@ -1930,7 +2172,7 @@ def main() -> None:
                 libffi_archive,
             )
 
-        LOG_PREFIX[0] = "cpython"
+        set_logger("cpython", LOG_FH[0])
         tar_path = build_cpython(
             args.python,
             target_triple,

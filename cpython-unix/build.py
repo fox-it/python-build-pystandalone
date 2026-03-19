@@ -11,6 +11,7 @@ import platform
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 import docker
@@ -50,6 +51,7 @@ DOWNLOADS_PATH = BUILD / "downloads"
 SUPPORT = ROOT / "cpython-unix"
 EXTENSION_MODULES = SUPPORT / "extension-modules.yml"
 TARGETS_CONFIG = SUPPORT / "targets.yml"
+PYSTANDALONE = ROOT / "pystandalone"
 
 LINUX_ALLOW_SYSTEM_LIBRARIES = {
     "c",
@@ -112,9 +114,7 @@ def add_target_env(env, build_platform, target_triple, build_env):
         # This will make x86_64_v2, etc count as cross-compiling. This is
         # semantically correct, since the current machine may not support
         # instructions on the target machine type.
-        if env["BUILD_TRIPLE"] != target_triple or target_triple.endswith(
-            "-unknown-linux-musl"
-        ):
+        if env["BUILD_TRIPLE"] != target_triple or target_triple.endswith("-unknown-linux-musl"):
             env["CROSS_COMPILING"] = "1"
 
     elif build_platform.startswith("macos_"):
@@ -264,9 +264,7 @@ def simple_build(
         build_env.copy_file(SUPPORT / ("build-%s.sh" % entry))
 
         env = {
-            "%s_VERSION" % entry.upper().replace("-", "_").replace(".", "_"): DOWNLOADS[
-                entry
-            ]["version"],
+            "%s_VERSION" % entry.upper().replace("-", "_").replace(".", "_"): DOWNLOADS[entry]["version"],
         }
 
         if "static" in build_options:
@@ -301,9 +299,7 @@ def build_binutils(client, image, host_platform):
             environment=env,
         )
 
-        build_env.get_tools_archive(
-            toolchain_archive_path("binutils", host_platform), "host"
-        )
+        build_env.get_tools_archive(toolchain_archive_path("binutils", host_platform), "host")
 
 
 def materialize_clang(host_platform: str, target_triple: str):
@@ -352,9 +348,7 @@ def build_musl(client, image, host_platform: str, target_triple: str, build_opti
         build_env.get_tools_archive(toolchain_archive_path(musl, host_platform), "host")
 
 
-def build_libedit(
-    settings, client, image, host_platform, target_triple, build_options, dest_archive
-):
+def build_libedit(settings, client, image, host_platform, target_triple, build_options, dest_archive):
     libedit_archive = download_entry("libedit", DOWNLOADS_PATH)
 
     with build_environment(client, image) as build_env:
@@ -369,9 +363,7 @@ def build_libedit(
                 static="static" in build_options,
             )
 
-        build_env.install_artifact_archive(
-            BUILD, "ncurses", target_triple, build_options
-        )
+        build_env.install_artifact_archive(BUILD, "ncurses", target_triple, build_options)
         build_env.copy_file(libedit_archive)
         build_env.copy_file(SUPPORT / "build-libedit.sh")
 
@@ -405,9 +397,7 @@ def build_cpython_host(
         archive = DOWNLOADS_PATH / ("Python-%s.tar.xz" % python_version)
         print("Compressing %s to %s" % (python_source, archive))
         with archive.open("wb") as fh:
-            create_tar_from_directory(
-                fh, python_source, path_prefix="Python-%s" % python_version
-            )
+            create_tar_from_directory(fh, python_source, path_prefix="Python-%s" % python_version)
 
     with build_environment(client, image) as build_env:
         build_env.install_toolchain(
@@ -497,9 +487,7 @@ def python_build_info(
             )
 
         if lto:
-            llvm_version = DOWNLOADS[clang_toolchain(platform, target_triple)][
-                "version"
-            ]
+            llvm_version = DOWNLOADS[clang_toolchain(platform, target_triple)]["version"]
             if "+" in llvm_version:
                 llvm_version = llvm_version.split("+")[0]
 
@@ -518,9 +506,7 @@ def python_build_info(
         )
 
         if lto:
-            object_file_format = (
-                "llvm-bitcode:%s" % DOWNLOADS["llvm-aarch64-macos"]["version"]
-            )
+            object_file_format = "llvm-bitcode:%s" % DOWNLOADS["llvm-aarch64-macos"]["version"]
         else:
             object_file_format = "mach-o"
     else:
@@ -566,15 +552,9 @@ def python_build_info(
         if lib.startswith("-l"):
             lib = lib[2:]
 
-            if (
-                platform in ("linux_x86_64", "linux_aarch64")
-                and lib not in linux_allowed_system_libraries
-            ):
+            if platform in ("linux_x86_64", "linux_aarch64") and lib not in linux_allowed_system_libraries:
                 raise Exception("unexpected library in LIBS (%s): %s" % (libs, lib))
-            elif (
-                platform.startswith("macos_")
-                and lib not in MACOS_ALLOW_SYSTEM_LIBRARIES
-            ):
+            elif platform.startswith("macos_") and lib not in MACOS_ALLOW_SYSTEM_LIBRARIES:
                 raise Exception("unexpected library in LIBS (%s): %s" % (libs, lib))
 
             log("adding core system link library: %s" % lib)
@@ -588,9 +568,7 @@ def python_build_info(
             skip = True
             framework = libs[i + 1]
             if framework not in MACOS_ALLOW_FRAMEWORKS:
-                raise Exception(
-                    "unexpected framework in LIBS (%s): %s" % (libs, framework)
-                )
+                raise Exception("unexpected framework in LIBS (%s): %s" % (libs, framework))
 
             log("adding core link framework: %s" % framework)
             bi["core"]["links"].append({"name": framework, "framework": True})
@@ -728,14 +706,19 @@ def build_cpython(
         python_archive = DOWNLOADS_PATH / ("Python-%s.tar.xz" % python_version)
         print("Compressing %s to %s" % (python_source, python_archive))
         with python_archive.open("wb") as fh:
-            create_tar_from_directory(
-                fh, python_source, path_prefix="Python-%s" % python_version
-            )
+            create_tar_from_directory(fh, python_source, path_prefix="Python-%s" % python_version)
 
     setuptools_archive = download_entry("setuptools", DOWNLOADS_PATH)
     pip_archive = download_entry("pip", DOWNLOADS_PATH)
 
     ems = extension_modules_config(EXTENSION_MODULES)
+
+    # PYSTANDALONE: remove disabled modules
+    for line in (PYSTANDALONE / "disabled-modules").read_text().splitlines():
+        if not (line := line.strip()) or line.startswith("#") or line not in ems:
+            continue
+
+        ems[line]["disabled-targets"] = [".*"]
 
     setup = derive_setup_local(
         python_archive,
@@ -770,9 +753,7 @@ def build_cpython(
             build_env.install_artifact_archive(BUILD, p, target_triple, build_options)
 
         # Install the host CPython.
-        build_env.install_toolchain_archive(
-            BUILD, entry_name, host_platform, version=python_version
-        )
+        build_env.install_toolchain_archive(BUILD, entry_name, host_platform, version=python_version)
 
         for p in (
             python_archive,
@@ -806,6 +787,27 @@ def build_cpython(
             fh.flush()
 
             build_env.copy_file(fh.name, dest_name="Makefile.extra")
+
+        # PYSTANDALONE: copy our files and patches into the build environment
+        with tempfile.NamedTemporaryFile("wb") as fh:
+            os.chmod(fh.name, 0o644)
+
+            v = ".".join(python_version.split(".")[0:2])
+            p = "macos" if host_platform.startswith("macos_") else "linux"
+
+            with tarfile.open(fileobj=fh, mode="w") as tf:
+                tf.add(PYSTANDALONE / "src", arcname="pystandalone/src")
+                tf.add(
+                    PYSTANDALONE / "patch" / f"cpython-{v}.patch",
+                    arcname=f"pystandalone/patch/cpython-{v}.patch",
+                )
+                tf.add(
+                    PYSTANDALONE / "patch" / f"cpython-{v}-{p}.patch",
+                    arcname=f"pystandalone/patch/cpython-{v}-{p}.patch",
+                )
+
+            fh.flush()
+            build_env.copy_file(fh.name, dest_name="pystandalone.tar")
 
         env = {
             "PIP_VERSION": DOWNLOADS["pip"]["version"],
@@ -863,10 +865,7 @@ def build_cpython(
                     if not glibc_max_version:
                         raise Exception("failed to retrieve glibc max symbol version")
 
-                    crt_features.append(
-                        "glibc-max-symbol-version:%s"
-                        % glibc_max_version.decode("ascii")
-                    )
+                    crt_features.append("glibc-max-symbol-version:%s" % glibc_max_version.decode("ascii"))
 
             python_symbol_visibility = "global-default"
 
@@ -894,9 +893,7 @@ def build_cpython(
             "python_stdlib_test_packages": sorted(STDLIB_TEST_PACKAGES),
             "python_symbol_visibility": python_symbol_visibility,
             "python_extension_module_loading": extension_module_loading,
-            "libpython_link_mode": (
-                "static" if "static" in parsed_build_options else "shared"
-            ),
+            "libpython_link_mode": ("static" if "static" in parsed_build_options else "shared"),
             "crt_features": crt_features,
             "run_tests": "build/run_tests.py",
             "build_info": python_build_info(
@@ -927,9 +924,7 @@ def build_cpython(
             python_info["apple_sdk_platform"] = env["APPLE_SDK_PLATFORM"]
             python_info["apple_sdk_version"] = env["APPLE_SDK_VERSION"]
             python_info["apple_sdk_canonical_name"] = env["APPLE_SDK_CANONICAL_NAME"]
-            python_info["apple_sdk_deployment_target"] = env[
-                "APPLE_MIN_DEPLOYMENT_TARGET"
-            ]
+            python_info["apple_sdk_deployment_target"] = env["APPLE_MIN_DEPLOYMENT_TARGET"]
 
         # Add metadata derived from built distribution.
         python_info.update(extra_metadata)
@@ -968,9 +963,7 @@ def main():
 
     # Note these arguments must be synced with `build-main.py`
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--host-platform", required=True, help="Platform we are building from"
-    )
+    parser.add_argument("--host-platform", required=True, help="Platform we are building from")
     parser.add_argument(
         "--target-triple",
         required=True,
@@ -994,9 +987,7 @@ def main():
         action="store_true",
         help="Indicates we are building a toolchain artifact",
     )
-    parser.add_argument(
-        "--dest-archive", required=True, help="Path to archive that we are producing"
-    )
+    parser.add_argument("--dest-archive", required=True, help="Path to archive that we are producing")
     parser.add_argument("--docker-image", help="Docker image to use for building")
     parser.add_argument(
         "--python-source",
@@ -1017,9 +1008,7 @@ def main():
     target_triple = args.target_triple
     host_platform = args.host_platform
     build_options = args.options
-    python_source = (
-        pathlib.Path(args.python_source) if args.python_source != "null" else None
-    )
+    python_source = pathlib.Path(args.python_source) if args.python_source != "null" else None
     dest_archive = pathlib.Path(args.dest_archive)
     docker_image = args.docker_image
 
@@ -1038,11 +1027,7 @@ def main():
     elif args.action.startswith("cpython-") and args.action.endswith("-host"):
         log_name = args.action
     elif action.startswith("cpython-"):
-        version = (
-            os.environ["PYBUILD_PYTHON_VERSION"]
-            if python_source
-            else DOWNLOADS[action]["version"]
-        )
+        version = os.environ["PYBUILD_PYTHON_VERSION"] if python_source else DOWNLOADS[action]["version"]
         log_name = "%s-%s-%s-%s" % (
             action,
             version,
@@ -1072,9 +1057,7 @@ def main():
 
             # Override the DOWNLOADS package entry for CPython for the local build
             if python_source:
-                write_cpython_version(
-                    BUILD / "versions", os.environ["PYBUILD_PYTHON_VERSION"]
-                )
+                write_cpython_version(BUILD / "versions", os.environ["PYBUILD_PYTHON_VERSION"])
 
         elif action.startswith("image-"):
             image_name = action[6:]
