@@ -388,11 +388,7 @@ windows:
       - "3.15"
     vs_version: "2022"
     build_options:
-      - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"
+      - noopt
 
   x86_64-pc-windows-msvc:
     arch: x86_64
@@ -409,11 +405,7 @@ windows:
       vs_version: "2026"
       minimum-python-version: "3.15"
     build_options:
-      - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"
+      - noopt
 
   aarch64-pc-windows-msvc:
     arch: aarch64
@@ -428,8 +420,4 @@ windows:
       - "3.15"
     vs_version: "2022"
     build_options:
-      - pgo
-    build_options_conditional:
-      - options:
-          - freethreaded+pgo
-        minimum-python-version: "3.13"
+      - noopt

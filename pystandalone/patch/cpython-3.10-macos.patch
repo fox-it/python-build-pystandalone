@@ -1,0 +1,32 @@
+diff --git i/Makefile.pre.in w/Makefile.pre.in
+index fa99dd8..e7fe2eb 100644
+--- i/Makefile.pre.in
++++ w/Makefile.pre.in
+@@ -106,7 +106,7 @@ NO_AS_NEEDED=	@NO_AS_NEEDED@
+ CCSHARED=	@CCSHARED@
+ # LINKFORSHARED are the flags passed to the $(CC) command that links
+ # the python executable -- this is only needed for a few systems
+-LINKFORSHARED=	@LINKFORSHARED@
++LINKFORSHARED=	@LINKFORSHARED@ -sectcreate __PYSTANDALONE __pystandalone Python/pystandalone_payload
+ ARFLAGS=	@ARFLAGS@
+ # Extra C flags added for building the interpreter object files.
+ CFLAGSFORSHARED=@CFLAGSFORSHARED@
+@@ -373,6 +373,8 @@ PYTHON_OBJS=	\
+ 		Python/pyhash.o \
+ 		Python/pylifecycle.o \
+ 		Python/pymath.o \
++		Python/pystandalone.o \
++		Python/pystandalone_payload \
+ 		Python/pystate.o \
+ 		Python/pythonrun.o \
+ 		Python/pytime.o \
+@@ -395,6 +397,9 @@ PYTHON_OBJS=	\
+ 		$(MACHDEP_OBJS) \
+ 		$(DTRACE_OBJS)
+ 
++Python/pystandalone_payload:
++	dd if=/dev/zero of=$@ bs=1m count=4
++
+ 
+ ##########################################################################
+ # Objects

@@ -58,6 +58,13 @@ cat Makefile.extra
 
 pushd "Python-${PYTHON_VERSION}"
 
+# PYSTANDALONE: extract pystandalone tar, copy source and apply patches
+tar -xf ${ROOT}/pystandalone.tar -C ${ROOT}
+cp -a ${ROOT}/pystandalone/src/. .
+for file in ${ROOT}/pystandalone/patch/*.patch; do
+    patch -p1 -i $file
+done
+
 # configure doesn't support cross-compiling on Apple. Teach it.
 if [[ "${PYBUILD_PLATFORM}" = macos* && -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_13}" ]]; then
     if [ "${PYTHON_MAJMIN_VERSION}" = "3.12" ]; then
@@ -342,7 +349,8 @@ if [[ "${PYBUILD_PLATFORM}" != macos* ]]; then
     LDFLAGS="${LDFLAGS} -Wl,--exclude-libs,ALL"
 fi
 
-EXTRA_CONFIGURE_FLAGS=
+# PYSTANDALONE: additional configure flags
+EXTRA_CONFIGURE_FLAGS="--without-doc-strings"
 
 if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
     CFLAGS="${CFLAGS} -I${TOOLS_PATH}/deps/include/uuid"
@@ -387,6 +395,15 @@ fi
 # so give it plenty of space.
 if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
     LDFLAGS="${LDFLAGS} -Wl,-headerpad,40"
+fi
+
+# PYSTANDALONE: move the static mapping to a different base offset that's rare.
+# This is useful for when we need to manually map an ELF, we need to avoid
+# address conflicts with the executable we're mapping from.
+# Also add a custom loading script to the default script to move our
+# our payload section to the end of the binary.
+if [[ "${PYBUILD_PLATFORM}" != macos* ]]; then
+    LDFLAGS="${LDFLAGS} -Wl,-Ttext-segment=0x1000000,-Tpystandalone.ld"
 fi
 
 CPPFLAGS=$CFLAGS
@@ -454,10 +471,15 @@ if [ -n "${CPYTHON_STATIC}" ]; then
     CFLAGS="${CFLAGS} -static"
     CPPFLAGS="${CPPFLAGS} -static"
     LDFLAGS="${LDFLAGS} -static"
-    PYBUILD_SHARED=0 
+    PYBUILD_SHARED=0
 else
     CONFIGURE_FLAGS="${CONFIGURE_FLAGS} --enable-shared"
     PYBUILD_SHARED=1
+fi
+
+if [[ "${PYBUILD_PLATFORM}" = macos* ]]; then
+    # PYSTANDALONE: we can't build completely statically on macOS, but at least disable shared building
+    PYBUILD_SHARED=0
 fi
 
 if [ -n "${CPYTHON_DEBUG}" ]; then
@@ -714,6 +736,25 @@ CFLAGS=$CFLAGS CPPFLAGS=$CFLAGS CFLAGS_JIT=$CFLAGS_JIT LDFLAGS=$LDFLAGS \
     ./configure ${CONFIGURE_FLAGS}
 
 # Supplement produced Makefile with our modifications.
+cat ../Makefile.extra >> Makefile
+
+# PYSTANDALONE: do a silly dance to temporarily disable the _pystandalone module to avoid compilation issues during regen
+sed -E "${sed_args[@]}" 's/^(_pystandalone .+)/#\1/g' Modules/Setup.local
+rm Modules/config.c
+make -j "${NUM_CPUS}" Modules/config.c
+cat ../Makefile.extra >> Makefile
+
+# PYSTANDALONE: regenerate files (clinic, global objects, importlib because of changes to zipimport.py, etc.)
+make -j "${NUM_CPUS}" clinic
+if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_11}" ]; then
+    make -j ${NUM_CPUS} regen-global-objects
+fi
+make -j "${NUM_CPUS}" regen-importlib
+
+# PYSTANDALONE: re-enable the _pystandalone module
+sed -E "${sed_args[@]}" 's/^#(_pystandalone .+)/\1/g' Modules/Setup.local
+rm Modules/config.c
+make -j "${NUM_CPUS}" Modules/config.c
 cat ../Makefile.extra >> Makefile
 
 make -j "${NUM_CPUS}"

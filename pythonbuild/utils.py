@@ -29,6 +29,31 @@ from .downloads import DOWNLOADS
 from .logging import log
 
 
+class NoSearchStringError(Exception):
+    """Represents a missing search string when replacing content in a file."""
+
+
+def static_replace_in_file(p: pathlib.Path, search, replace):
+    """Replace occurrences of a string in a file.
+
+    The updated file contents are written out in place.
+    """
+
+    with p.open("rb") as fh:
+        data = fh.read()
+
+    # Build should be as deterministic as possible. Assert that wanted changes
+    # actually occur.
+    if search not in data:
+        raise NoSearchStringError("search string (%s) not in %s" % (search, p))
+
+    log("replacing `%s` with `%s` in %s" % (search, replace, p))
+    data = data.replace(search, replace)
+
+    with p.open("wb") as fh:
+        fh.write(data)
+
+
 def current_host_platform() -> str:
     """Resolve the name of the current machine's host platform.
 

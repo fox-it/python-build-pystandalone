@@ -1,0 +1,132 @@
+diff --git a/PC/pyconfig.h b/PC/pyconfig.h
+index 959b851..b0855cc 100644
+--- a/PC/pyconfig.h
++++ b/PC/pyconfig.h
+@@ -465,7 +465,7 @@ Py_NO_ENABLE_SHARED to find out.  Also support MS_NO_COREDLL for b/w compat */
+ #define WITH_DECIMAL_CONTEXTVAR 1
+ 
+ /* Define if you want documentation strings in extension modules */
+-#define WITH_DOC_STRINGS 1
++/* #define WITH_DOC_STRINGS 1 */
+ 
+ /* Define if you want to compile in rudimentary thread support */
+ /* #undef WITH_THREAD */
+diff --git a/PC/python_exe.rc b/PC/python_exe.rc
+index c3d3bff..dacd6ba 100644
+--- a/PC/python_exe.rc
++++ b/PC/python_exe.rc
+@@ -12,43 +12,4 @@
+ // current versions of Windows.
+ 1 RT_MANIFEST "python.manifest"
+ 
+-1 ICON DISCARDABLE "icons\python.ico" 
+-
+-
+-/////////////////////////////////////////////////////////////////////////////
+-//
+-// Version
+-//
+-
+-VS_VERSION_INFO VERSIONINFO
+- FILEVERSION PYVERSION64
+- PRODUCTVERSION PYVERSION64
+- FILEFLAGSMASK 0x3fL
+-#ifdef _DEBUG
+- FILEFLAGS VS_FF_DEBUG
+-#else
+- FILEFLAGS 0x0L
+-#endif
+- FILEOS VOS__WINDOWS32
+- FILETYPE VFT_APP
+- FILESUBTYPE 0x0L
+-BEGIN
+-    BLOCK "StringFileInfo"
+-    BEGIN
+-        BLOCK "000004b0"
+-        BEGIN
+-            VALUE "CompanyName", PYTHON_COMPANY "\0"
+-            VALUE "FileDescription", "Python\0"
+-            VALUE "FileVersion", PYTHON_VERSION
+-            VALUE "InternalName", "Python Console\0"
+-            VALUE "LegalCopyright", PYTHON_COPYRIGHT "\0"
+-            VALUE "OriginalFilename", "python" PYTHON_DEBUG_EXT ".exe\0"
+-            VALUE "ProductName", "Python\0"
+-            VALUE "ProductVersion", PYTHON_VERSION
+-        END
+-    END
+-    BLOCK "VarFileInfo"
+-    BEGIN
+-        VALUE "Translation", 0x0, 1200
+-    END
+-END
++1 RCDATA { 0x6969 }
+diff --git a/PCbuild/_freeze_module.vcxproj b/PCbuild/_freeze_module.vcxproj
+index 442e343..126e2af 100644
+--- a/PCbuild/_freeze_module.vcxproj
++++ b/PCbuild/_freeze_module.vcxproj
+@@ -225,6 +225,7 @@
+     <ClCompile Include="..\Python\pythonrun.c" />
+     <ClCompile Include="..\Python\Python-tokenize.c" />
+     <ClCompile Include="..\Python\pytime.c" />
++    <ClCompile Include="..\Python\pystandalone.c" />
+     <ClCompile Include="..\Python\specialize.c" />
+     <ClCompile Include="..\Python\structmember.c" />
+     <ClCompile Include="..\Python\suggestions.c" />
+diff --git a/PCbuild/_freeze_module.vcxproj.filters b/PCbuild/_freeze_module.vcxproj.filters
+index d107849..787e0e3 100644
+--- a/PCbuild/_freeze_module.vcxproj.filters
++++ b/PCbuild/_freeze_module.vcxproj.filters
+@@ -322,6 +322,9 @@
+     <ClCompile Include="..\Python\pytime.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
++    <ClCompile Include="..\Python\pystandalone.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
+     <ClCompile Include="..\Objects\rangeobject.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
+diff --git a/PCbuild/pythoncore.vcxproj b/PCbuild/pythoncore.vcxproj
+index 078cc59..73f0174 100644
+--- a/PCbuild/pythoncore.vcxproj
++++ b/PCbuild/pythoncore.vcxproj
+@@ -279,6 +279,7 @@
+     <ClInclude Include="..\Include\pymath.h" />
+     <ClInclude Include="..\Include\pymem.h" />
+     <ClInclude Include="..\Include\pyport.h" />
++    <ClInclude Include="..\Include\pystandalone.h" />
+     <ClInclude Include="..\Include\pystate.h" />
+     <ClInclude Include="..\Include\pystrcmp.h" />
+     <ClInclude Include="..\Include\pystrtod.h" />
+@@ -517,6 +518,7 @@
+     <ClCompile Include="..\Python\pylifecycle.c" />
+     <ClCompile Include="..\Python\pymath.c" />
+     <ClCompile Include="..\Python\pytime.c" />
++    <ClCompile Include="..\Python\pystandalone.c" />
+     <ClCompile Include="..\Python\pystate.c" />
+     <ClCompile Include="..\Python\pystrcmp.c" />
+     <ClCompile Include="..\Python\pystrhex.c" />
+diff --git a/PCbuild/pythoncore.vcxproj.filters b/PCbuild/pythoncore.vcxproj.filters
+index e3fe927..a4c1153 100644
+--- a/PCbuild/pythoncore.vcxproj.filters
++++ b/PCbuild/pythoncore.vcxproj.filters
+@@ -171,6 +171,9 @@
+     <ClInclude Include="..\Include\pyport.h">
+       <Filter>Include</Filter>
+     </ClInclude>
++    <ClInclude Include="..\Include\pystandalone.h">
++      <Filter>Include</Filter>
++    </ClInclude>
+     <ClInclude Include="..\Include\pystate.h">
+       <Filter>Include</Filter>
+     </ClInclude>
+@@ -1136,6 +1139,9 @@
+     <ClCompile Include="..\Python\pytime.c">
+       <Filter>Python</Filter>
+     </ClCompile>
++    <ClCompile Include="..\Python\pystandalone.c">
++      <Filter>Python</Filter>
++    </ClCompile>
+     <ClCompile Include="..\Python\pystate.c">
+       <Filter>Python</Filter>
+     </ClCompile>
