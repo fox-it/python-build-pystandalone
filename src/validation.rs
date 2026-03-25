@@ -902,7 +902,19 @@ const GLOBAL_EXTENSIONS_WINDOWS_PRE_3_13: &[&str] = &["_msi"];
 const GLOBAL_EXTENSIONS_WINDOWS_NO_STATIC: &[&str] = &["_testinternalcapi", "_tkinter"];
 
 /// Extension modules that should be built as shared libraries.
-const SHARED_LIBRARY_EXTENSIONS: &[&str] = &["_crypt", "_ctypes_test", "_dbm", "_tkinter"];
+const SHARED_LIBRARY_EXTENSIONS: &[&str] = &[
+    "_crypt",
+    "_ctypes_test",
+    "_dbm",
+    "_testbuffer",
+    "_testcapi",
+    "_testexternalinspection",
+    "_testimportmultiple",
+    "_testlimitedcapi",
+    "_testmultiphase",
+    "_testsinglephase",
+    "_tkinter",
+];
 
 const PYTHON_VERIFICATIONS: &str = include_str!("verify_distribution.py");
 
@@ -1781,6 +1793,14 @@ fn validate_extension_modules(
             "_testmultiphase",
             "_xxtestfuzz",
         ]);
+
+        if !static_crt {
+            wanted.insert("_testcapi");
+
+            if !matches!(python_major_minor, "3.10" | "3.11" | "3.12") {
+                wanted.insert("_testlimitedcapi");
+            }
+        }
     }
 
     if (is_linux || is_macos) && matches!(python_major_minor, "3.13") {

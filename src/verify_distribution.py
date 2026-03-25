@@ -217,6 +217,23 @@ os91j5H7o/zhdI/JAgMBAAE=
         for hash in wanted_hashes:
             self.assertIn(hash, hashlib.algorithms_available)
 
+    @unittest.skipIf(os.name == "nt", "_testcapi not built on Windows")
+    @unittest.skipIf(
+        os.environ["TARGET_TRIPLE"].endswith("-musl")
+        and "static" in os.environ["BUILD_OPTIONS"],
+        "_testcapi not available on statically-linked distributions",
+    )
+    @unittest.skipIf(True, "_testcapi is disabled in pystandalone")
+    def test_testcapi(self):
+        import _testcapi
+
+        self.assertIsNotNone(_testcapi)
+
+        if sys.version_info[0:2] >= (3, 13):
+            import _testlimitedcapi
+
+            self.assertIsNotNone(_testlimitedcapi)
+
     @unittest.skipIf(True, "sqlite3 is disabled in pystandalone")
     def test_sqlite(self):
         import sqlite3
