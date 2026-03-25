@@ -616,6 +616,9 @@ export PROFILE_TASK='-m test --pgo'
 # and there will be no loss in profile quality.
 PROFILE_TASK="${PROFILE_TASK} -j ${NUM_CPUS}"
 
+# PYSTANDALONE: ignore tests for modules we disabled
+PROFILE_TASK="${PROFILE_TASK} --ignore test_cmath test_decimal test_sqlite3 test_statistics"
+
 # On 3.14+ `test_strftime_y2k` fails when cross-compiling for `x86_64_v2` and `x86_64_v3` targets on
 # Linux, so we ignore it. See https://github.com/python/cpython/issues/128104
 if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" && -n "${CROSS_COMPILING}" && "${PYBUILD_PLATFORM}" != macos* ]]; then
@@ -628,16 +631,10 @@ if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" ]]; then
     PROFILE_TASK="${PROFILE_TASK} --ignore test_json"
 fi
 
-<<<<<<< HEAD
-# PYSTANDALONE: ignore tests for modules we disabled
-PROFILE_TASK="${PROFILE_TASK} --ignore test_cmath test_decimal test_sqlite3 test_statistics"
-||||||| 517bea8
-=======
 # PGO optimized / BOLT instrumented binaries segfault in a test_bytes test. Skip it.
 if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_13}" && "${TARGET_TRIPLE}" == x86_64* ]]; then
     PROFILE_TASK="${PROFILE_TASK} --ignore test.test_bytes.BytesTest.test_from_format"
 fi
->>>>>>> refs/tags/20260324
 
 # ./configure tries to auto-detect whether it can build 128-bit and 256-bit SIMD helpers for HACL,
 # but on x86-64 that requires v2 and v3 respectively, and on arm64 the performance is bad as noted

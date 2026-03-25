@@ -38,12 +38,6 @@ tokio = "1.48.0"
 tokio-util = "0.7.17"
 url = "2.5.7"
 version-compare = "0.2.1"
-<<<<<<< HEAD
 walkdir = "2.5.0"
-zip = "6.0.0"
-||||||| 517bea8
-zip = "6.0.0"
-=======
 zip = "8.2.0"
->>>>>>> refs/tags/20260324
 zstd = "0.13.3"
