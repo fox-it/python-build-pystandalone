@@ -4,18 +4,29 @@
 
 use {
     crate::{json::*, macho::*},
-    anyhow::{Context, Result, anyhow},
+    anyhow::{anyhow, Context, Result},
     clap::ArgMatches,
     normalize_path::NormalizePath,
     object::{
+<<<<<<< HEAD
         Architecture, Endianness, FileKind, Object, ObjectSection, SectionIndex, SymbolScope,
+||||||| 517bea8
+        Architecture, Endianness, FileKind, Object, SectionIndex, SymbolScope,
+=======
+>>>>>>> refs/tags/20260324
         elf::{
-            ET_DYN, ET_EXEC, FileHeader32, FileHeader64, SHN_UNDEF, STB_GLOBAL, STB_WEAK,
+            FileHeader32, FileHeader64, ET_DYN, ET_EXEC, SHN_UNDEF, STB_GLOBAL, STB_WEAK,
             STV_DEFAULT, STV_HIDDEN,
         },
+<<<<<<< HEAD
         endian::LittleEndian as LE,
         macho::{LC_CODE_SIGNATURE, MH_OBJECT, MH_TWOLEVEL, MachHeader32, MachHeader64},
         pe::RT_RCDATA,
+||||||| 517bea8
+        macho::{LC_CODE_SIGNATURE, MH_OBJECT, MH_TWOLEVEL, MachHeader32, MachHeader64},
+=======
+        macho::{MachHeader32, MachHeader64, LC_CODE_SIGNATURE, MH_OBJECT, MH_TWOLEVEL},
+>>>>>>> refs/tags/20260324
         read::{
             elf::{Dyn, FileHeader, SectionHeader, Sym},
             macho::{LoadCommandVariant, MachHeader, Nlist, Section, Segment},
@@ -23,6 +34,7 @@ use {
                 ImageNtHeaders, ImageOptionalHeader, PeFile, PeFile32, PeFile64, ResourceNameOrId,
             },
         },
+        Architecture, Endianness, FileKind, Object, SectionIndex, SymbolScope,
     },
     once_cell::sync::Lazy,
     std::{
@@ -902,7 +914,19 @@ const GLOBAL_EXTENSIONS_WINDOWS_PRE_3_13: &[&str] = &["_msi"];
 const GLOBAL_EXTENSIONS_WINDOWS_NO_STATIC: &[&str] = &["_testinternalcapi", "_tkinter"];
 
 /// Extension modules that should be built as shared libraries.
-const SHARED_LIBRARY_EXTENSIONS: &[&str] = &["_crypt", "_ctypes_test", "_dbm", "_tkinter"];
+const SHARED_LIBRARY_EXTENSIONS: &[&str] = &[
+    "_crypt",
+    "_ctypes_test",
+    "_dbm",
+    "_testbuffer",
+    "_testcapi",
+    "_testexternalinspection",
+    "_testimportmultiple",
+    "_testlimitedcapi",
+    "_testmultiphase",
+    "_testsinglephase",
+    "_tkinter",
+];
 
 const PYTHON_VERIFICATIONS: &str = include_str!("verify_distribution.py");
 
@@ -1781,6 +1805,14 @@ fn validate_extension_modules(
             "_testmultiphase",
             "_xxtestfuzz",
         ]);
+
+        if !static_crt {
+            wanted.insert("_testcapi");
+
+            if !matches!(python_major_minor, "3.10" | "3.11" | "3.12") {
+                wanted.insert("_testlimitedcapi");
+            }
+        }
     }
 
     if (is_linux || is_macos) && matches!(python_major_minor, "3.13") {

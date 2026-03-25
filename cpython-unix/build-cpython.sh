@@ -265,6 +265,20 @@ if [ -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_11}" ]; then
     patch -p1 -i "${ROOT}/patch-pgo-make-targets.patch"
 fi
 
+# Show PGO instrumentation statistics to aid debugging PGO.
+if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_12}" ]; then
+    patch -p1 -i "${ROOT}/patch-pgo-print-statistics.patch"
+else
+    patch -p1 -i "${ROOT}/patch-pgo-print-statistics-3.11.patch"
+fi
+
+# Use a pool of PGO data files with merging to prevent data loss.
+if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_12}" ]; then
+    patch -p1 -i "${ROOT}/patch-pgo-file-pool.patch"
+else
+    patch -p1 -i "${ROOT}/patch-pgo-file-pool-3.11.patch"
+fi
+
 # There's a post-build Python script that verifies modules were
 # built correctly. Ideally we'd invoke this. But our nerfing of
 # the configure-based module building and replacing it with our
@@ -589,6 +603,19 @@ fi
 # Define the base PGO profiling task, which we'll extend below with ignores
 export PROFILE_TASK='-m test --pgo'
 
+# Run tests in parallel to reduce wall time.
+#
+# LLVM's PGO instruments compiled code to increment counters to track
+# call count. Same story for BOLT in instrumented mode, which we also use.
+# This approach is in contrast to sample based profiling where the program is
+# sampled periodically to see which code is active. In instrumented mode,
+# the wall time execution doesn't matter: a counter will be incremented
+# regardless of how fast the code runs.
+#
+# Use of instrumented mode means that it is safe to profile in parallel
+# and there will be no loss in profile quality.
+PROFILE_TASK="${PROFILE_TASK} -j ${NUM_CPUS}"
+
 # On 3.14+ `test_strftime_y2k` fails when cross-compiling for `x86_64_v2` and `x86_64_v3` targets on
 # Linux, so we ignore it. See https://github.com/python/cpython/issues/128104
 if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" && -n "${CROSS_COMPILING}" && "${PYBUILD_PLATFORM}" != macos* ]]; then
@@ -601,8 +628,16 @@ if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" ]]; then
     PROFILE_TASK="${PROFILE_TASK} --ignore test_json"
 fi
 
+<<<<<<< HEAD
 # PYSTANDALONE: ignore tests for modules we disabled
 PROFILE_TASK="${PROFILE_TASK} --ignore test_cmath test_decimal test_sqlite3 test_statistics"
+||||||| 517bea8
+=======
+# PGO optimized / BOLT instrumented binaries segfault in a test_bytes test. Skip it.
+if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_13}" && "${TARGET_TRIPLE}" == x86_64* ]]; then
+    PROFILE_TASK="${PROFILE_TASK} --ignore test.test_bytes.BytesTest.test_from_format"
+fi
+>>>>>>> refs/tags/20260324
 
 # ./configure tries to auto-detect whether it can build 128-bit and 256-bit SIMD helpers for HACL,
 # but on x86-64 that requires v2 and v3 respectively, and on arm64 the performance is bad as noted
@@ -1352,7 +1387,7 @@ ${BUILD_PYTHON} "${ROOT}/fix_shebangs.py" "${ROOT}/out/python/install"
 # downstream consumers.
 OBJECT_DIRS="Objects Parser Parser/lexer Parser/pegen Parser/tokenizer Programs Python Python/deepfreeze"
 OBJECT_DIRS="${OBJECT_DIRS} Modules"
-for ext in _blake2 cjkcodecs _ctypes _ctypes/darwin _decimal _expat _hacl _io _multiprocessing _remote_debugging _sha3 _sqlite _sre _testinternalcapi _xxtestfuzz _zstd; do
+for ext in _blake2 cjkcodecs _ctypes _ctypes/darwin _decimal _expat _hacl _io _multiprocessing _remote_debugging _sha3 _sqlite _sre _testcapi _testinternalcapi _testlimitedcapi _xxtestfuzz _zstd; do
     OBJECT_DIRS="${OBJECT_DIRS} Modules/${ext}"
 done
 
