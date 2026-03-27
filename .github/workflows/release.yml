@@ -25,7 +25,7 @@ jobs:
     name: Release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    runs-on: depot-ubuntu-24.04-8
+    runs-on: ubuntu-24.04
 
     permissions:
       contents: write
@@ -97,27 +97,3 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.tar.zst
-
-      - name: Publish to Astral mirror
-        if: ${{ github.event.inputs.dry-run == 'false' }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MIRROR_R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MIRROR_R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: https://${{ secrets.MIRROR_R2_CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          AWS_DEFAULT_REGION: auto
-          R2_BUCKET: ${{ secrets.MIRROR_R2_BUCKET_NAME }}
-          PROJECT: python-build-standalone
-          VERSION: ${{ github.event.inputs.tag }}
-        run: |
-          just release-upload-mirror \
-            ${R2_BUCKET} \
-            github/${PROJECT}/releases/download/${VERSION}/ \
-            ${VERSION}
-
-  publish-versions:
-    needs: release
-    if: ${{ github.event.inputs.dry-run == 'false' }}
-    uses: ./.github/workflows/publish-versions.yml
-    with:
-      tag: ${{ github.event.inputs.tag }}
-    secrets: inherit

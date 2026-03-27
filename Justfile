@@ -28,15 +28,15 @@ cat-python-json archive:
 # Download release artifacts from GitHub Actions
 release-download-distributions token commit:
   mkdir -p dist
-  cargo run --release -- fetch-release-distributions --token {{token}} --commit {{commit}} --dest dist
+  cargo run --release -- fetch-release-distributions --token {{token}} --commit {{commit}} --dest dist --org fox-it --repo python-build-pystandalone
 
 # Upload release artifacts to a GitHub release.
 release-upload-distributions token datetime tag:
-  cargo run --release -- upload-release-distributions --token {{token}} --datetime {{datetime}} --tag {{tag}} --dist dist
+  cargo run --release -- upload-release-distributions --token {{token}} --datetime {{datetime}} --tag {{tag}} --dist dist --org fox-it --repo python-build-pystandalone
 
 # "Upload" release artifacts to a GitHub release in dry-run mode (skip upload).
 release-upload-distributions-dry-run token datetime tag:
-  cargo run --release -- upload-release-distributions --token {{token}} --datetime {{datetime}} --tag {{tag}} --dist dist -n
+  cargo run --release -- upload-release-distributions --token {{token}} --datetime {{datetime}} --tag {{tag}} --dist dist --org fox-it --repo python-build-pystandalone -n
 
 # Promote a tag to "latest" by pushing to the `latest-release` branch.
 release-set-latest-release tag:
@@ -51,8 +51,8 @@ release-set-latest-release tag:
   {
     "version": 1,
     "tag": "{{tag}}",
-    "release_url": "https://github.com/astral-sh/python-build-standalone/releases/tag/{{tag}}",
-    "asset_url_prefix": "https://github.com/astral-sh/python-build-standalone/releases/download/{{tag}}"
+    "release_url": "https://github.com/fox-it/python-build-pystandalone/releases/tag/{{tag}}",
+    "asset_url_prefix": "https://github.com/fox-it/python-build-pystandalone/releases/download/{{tag}}"
   }
   EOF
 
