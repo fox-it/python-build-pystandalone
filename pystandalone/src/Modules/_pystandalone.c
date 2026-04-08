@@ -740,7 +740,7 @@ _pystandalone.cipher
 
     name: str
     key: Py_buffer
-    iv: Py_buffer = None
+    iv: Py_buffer = NULL
 
 Return a new cipher object using the named algorithm.
 [clinic start generated code]*/

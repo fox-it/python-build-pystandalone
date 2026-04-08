@@ -863,6 +863,15 @@ def hack_pystandalone_files(source_path: pathlib.Path, python_version: str):
             bufsize=0,
         )
 
+    # PYSTANDALONE: In 3.14, argument clinic changed the syntax for optional arguments
+    # Our .c file is forward compatible, and we patch it at build time for backwards compatibility
+    if meets_python_maximum_version(python_version, "3.13"):
+        static_replace_in_file(
+            source_path / "Modules" / "_pystandalone.c",
+            b"Py_buffer = NULL",
+            b"Py_buffer = None",
+        )
+
     # PYSTANDALONE: run argument clinic
     log("running Argument Clinic")
     subprocess.run(
@@ -1825,6 +1834,9 @@ def build_cpython(
                 python_version=python_version,
                 windows_sdk_version=windows_sdk_version,
                 freethreaded=freethreaded,
+                exit_on_failure=not meets_python_maximum_version(
+                    python_version, "3.10"
+                ),
             )
             # PYSTANDALONE: rebuild to regenerate the frozen zipimport
             # In newer Python versions, regenerating frozen modules is done automatically

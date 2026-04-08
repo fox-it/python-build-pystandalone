@@ -2,7 +2,7 @@ name: macos
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
 
 concurrency:
@@ -12,7 +12,7 @@ concurrency:
 env:
   FORCE_COLOR: 1
 
-permissions: {}
+permissions: { }
 
 jobs:
   crate-build:
@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@e06108dd0aef18192324c70427afc47652e63a82 # v7.5.0
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: false
 
@@ -131,7 +131,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@e06108dd0aef18192324c70427afc47652e63a82 # v7.5.0
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: false
 
@@ -162,6 +162,7 @@ jobs:
         with:
           name: cpython-${{ matrix.python }}-${{ matrix.target_triple }}-${{ matrix.build_options }}
           path: dist/*
+          compression-level: '0'
 
       - name: Checkout macOS SDKs for validation
         if: ${{ ! matrix.dry-run }}
@@ -177,10 +178,10 @@ jobs:
         run: |
           chmod +x build/pythonbuild
 
+          build/pythonbuild validate-distribution --macos-sdks-path macosx-sdks dist/*.tar.zst
+          
           if [ "${MATRIX_RUN}" == "true" ]; then
-            EXTRA_ARGS="--run"
+            ./test-distribution.py dist/*.tar.zst
           fi
-
-          build/pythonbuild validate-distribution --macos-sdks-path macosx-sdks ${EXTRA_ARGS} dist/*.tar.zst
         env:
           MATRIX_RUN: ${{ matrix.run }}
