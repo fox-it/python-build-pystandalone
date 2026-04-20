@@ -5,9 +5,12 @@ description = "Produces standalone, highly-redistributable builds of Python."
 readme = "README.rst"
 requires-python = ">=3.10"
 dependencies = [
+    "boto3>=1.37",
+    "boto3-stubs[s3]>=1.42",
     "docker>=7.1.0",
     "jinja2>=3.1.5",
     "jsonschema>=4.23.0",
+    "lief==0.17.6",
     "pyyaml>=6.0.2",
     "six>=1.17.0",
     "tomli>=2.2.1",
@@ -16,9 +19,21 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.9.12,<0.10.0"]
+requires = ["uv_build>=0.9.12,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "pythonbuild"
 module-root = ""
+
+[dependency-groups]
+check = [
+    "mypy>=1.19.1",
+    "ruff>=0.15.7",
+    "types-jinja2>=2.11.9",
+    "types-jsonschema>=4.26.0.20260324",
+    "types-pyyaml>=6.0.12.20250915",
+]
+dev = [
+    "moto[server]>=5.1.22",
+]

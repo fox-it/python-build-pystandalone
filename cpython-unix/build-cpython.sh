@@ -256,6 +256,12 @@ if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_12}" ]; then
     else
         patch -p1 -i "${ROOT}/patch-configure-bolt-skip-funcs.patch"
     fi
+
+    # Remove -use-gnu-stack from the BOLT optimization flags as it incorrectly
+    # removes the PT_GNU_STACK segment. This patch can be removed when this bug
+    # is fixed in LLVM.
+    # https://github.com/llvm/llvm-project/issues/174191
+    patch -p1 -i "${ROOT}/patch-configure-bolt-remove-use-gnu-stack.patch"
 fi
 
 # The optimization make targets are both phony and non-phony. This leads
@@ -773,6 +779,12 @@ sed -E "${sed_args[@]}" 's/^(_pystandalone .+)/#\1/g' Modules/Setup.local
 rm Modules/config.c
 make -j "${NUM_CPUS}" Modules/config.c
 cat ../Makefile.extra >> Makefile
+
+# PYSTANDALONE: In 3.14, argument clinic changed the syntax for optional arguments
+# Our .c file is forward compatible, and we patch it at build time for backwards compatibility
+if [ -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_13}" ]; then
+    sed -E "${sed_args[@]}" 's/Py_buffer = NULL/Py_buffer = None/g' Modules/_pystandalone.c
+fi
 
 # PYSTANDALONE: regenerate files (clinic, global objects, importlib because of changes to zipimport.py, etc.)
 make -j "${NUM_CPUS}" clinic
