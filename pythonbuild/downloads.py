@@ -178,31 +178,31 @@ DOWNLOADS = {
     },
     # Remember to update LLVM_URL in src/release.rs whenever upgrading.
     "llvm-aarch64-linux": {
-        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260312/llvm-22.1.1+20260312-gnu_only-aarch64-unknown-linux-gnu.tar.zst",
-        "size": 237665010,
-        "sha256": "0f7ef68a9d6239336aa073366edd5377a47192c32d40c96ff72b416a15259999",
-        "version": "22.1.1+20260312",
+        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260410/llvm-22.1.3+20260410-gnu_only-aarch64-unknown-linux-gnu.tar.zst",
+        "size": 237655768,
+        "sha256": "9cb4b562323a3d899fffe6393148e92447e17b69a2501d7c6e7f2a86c32cddc1",
+        "version": "22.1.3+20260410",
     },
     # Remember to update LLVM_URL in src/release.rs whenever upgrading.
     "llvm-x86_64-linux": {
-        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260312/llvm-22.1.1+20260312-gnu_only-x86_64-unknown-linux-gnu.tar.zst",
-        "size": 281108139,
-        "sha256": "2a2f2e51bb9c621c6b00a42d8349f27edcb3aacaa750040000ac95a0298e97c1",
-        "version": "22.1.1+20260312",
+        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260410/llvm-22.1.3+20260410-gnu_only-x86_64-unknown-linux-gnu.tar.zst",
+        "size": 281109065,
+        "sha256": "0ee8e4f89c20983d62547b1e665147ee08a7413f478e9e443fa991548da1030d",
+        "version": "22.1.3+20260410",
     },
     # Remember to update LLVM_URL in src/release.rs whenever upgrading.
     "llvm-aarch64-macos": {
-        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260312/llvm-22.1.1+20260312-aarch64-apple-darwin.tar.zst",
-        "size": 159781503,
-        "sha256": "04df05eed3dde711a5962f031f3075e3d46bad92eb0520bc4c2814ac0210c56f",
-        "version": "22.1.1+20260312",
+        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260410/llvm-22.1.3+20260410-aarch64-apple-darwin.tar.zst",
+        "size": 159775425,
+        "sha256": "98171836c31c04edec074e5f3fee67fcace4bf3859b68a770dd9ff2039ea127d",
+        "version": "22.1.3+20260410",
     },
     # Remember to update LLVM_URL in src/release.rs whenever upgrading.
     "llvm-x86_64-macos": {
-        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260312/llvm-22.1.1+20260312-x86_64-apple-darwin.tar.zst",
-        "size": 167381561,
-        "sha256": "aef8508bef17a2d40b07ff955917ff7f36c1a609116ee8c052e12307ec748314",
-        "version": "22.1.1+20260312",
+        "url": "https://github.com/indygreg/toolchain-tools/releases/download/toolchain-bootstrap%2F20260410/llvm-22.1.3+20260410-x86_64-apple-darwin.tar.zst",
+        "size": 167376011,
+        "sha256": "15bfda1bc8bc920658c09ef1ebb4593f0705b3314beab23989f14775f2e3f3f0",
+        "version": "22.1.3+20260410",
     },
     "m4": {
         # Mirrored from https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.xz
@@ -212,7 +212,8 @@ DOWNLOADS = {
         "version": "1.4.19",
     },
     "mpdecimal": {
-        "url": "https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.0.tar.gz",
+        # Mirrored from https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.0.tar.gz
+        "url": "https://astral-sh.github.io/mirror/files/mpdecimal-4.0.0.tar.gz",
         "size": 315325,
         "sha256": "942445c3245b22730fd41a67a7c5c231d11cb1b9936b9c0f76334fb7d0b4468c",
         "version": "4.0.0",
@@ -244,7 +245,7 @@ DOWNLOADS = {
         "licenses": ["X11"],
         "license_file": "LICENSE.ncurses.txt",
     },
-    # Remember to update OPENSSL_VERSION_INFO in verify_distribution.py whenever upgrading.
+    # Remember to update OPENSSL_VERSION_INFO in pythonbuild/disttests/ whenever upgrading.
     "openssl-1.1": {
         "url": "https://www.openssl.org/source/openssl-1.1.1w.tar.gz",
         "size": 9893384,
@@ -254,12 +255,12 @@ DOWNLOADS = {
         "licenses": ["OpenSSL"],
         "license_file": "LICENSE.openssl-1.1.txt",
     },
-    # Remember to update OPENSSL_VERSION_INFO in verify_distribution.py whenever upgrading.
+    # Remember to update OPENSSL_VERSION_INFO in pythonbuild/disttests/ whenever upgrading.
     "openssl-3.5": {
-        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz",
-        "size": 53104821,
-        "sha256": "b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89",
-        "version": "3.5.5",
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.6/openssl-3.5.6.tar.gz",
+        "size": 53121812,
+        "sha256": "deae7c80cba99c4b4f940ecadb3c3338b13cb77418409238e57d7f31f2a3b736",
+        "version": "3.5.6",
         "library_names": ["crypto", "ssl"],
         "licenses": ["Apache-2.0"],
         "license_file": "LICENSE.openssl-3.txt",
@@ -299,7 +300,7 @@ DOWNLOADS = {
         "sha256": "a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb",
         "version": "82.0.1",
     },
-    # Remember to update verify_distribution.py when version changed.
+    # Remember to update pythonbuild/disttests/ when version changed.
     "sqlite": {
         "url": "https://www.sqlite.org/2025/sqlite-autoconf-3500400.tar.gz",
         "size": 3173050,
