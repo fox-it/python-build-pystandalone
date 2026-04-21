@@ -423,40 +423,6 @@ def extract_zip_to_directory(source: pathlib.Path, dest: pathlib.Path):
         zf.extractall(dest)
 
 
-def pystandalone_archive_filter(name: str) -> bool:
-    if name.startswith(
-        (
-            "python/build",
-            "python/install/include",
-            "python/install/share",
-            "python/install/libs",
-        )
-    ) and not name.endswith(".empty"):
-        return True
-
-    if name.startswith("python/install/lib") and not name.startswith(
-        "python/install/lib/python"
-    ):
-        return True
-
-    if name.startswith(("python/install/lib/python", "python/install/Lib")):
-        if "_testclinic" in name:
-            return True
-
-        module_name = name.split("/")[4 if name.startswith("python/install/lib") else 3]
-        if module_name in (
-            "ensurepip",
-            "test",
-            "pydoc_data",
-            "lib2to3",
-            "tkinter",
-            "turtle",
-        ) or module_name.startswith("config-"):
-            return True
-
-    return False
-
-
 def pystandalone_json_filter(info):
     info["build_info"]["core"]["objs"] = []
     for ext in info["build_info"]["extensions"].values():
@@ -481,11 +447,6 @@ def normalize_tar_archive(data: io.BytesIO) -> io.BytesIO:
         for ti in tf:
             # We don't care about directory entries. Tools can handle this fine.
             if ti.isdir():
-                continue
-
-            # PYSTANDALONE: we use this place to slim down our archive by removing files we don't care about
-            # The JSON will be wrong, but the diff with upstream will be cleaner
-            if pystandalone_archive_filter(ti.name):
                 continue
 
             filedata = tf.extractfile(ti)
