@@ -314,7 +314,7 @@ os91j5H7o/zhdI/JAgMBAAE=
         if os.name == "nt" and sys.version_info[0:2] < (3, 11):
             wanted_version = (1, 1, 1, 23, 15)
         else:
-            wanted_version = (3, 5, 0, 5, 0)
+            wanted_version = (3, 5, 0, 6, 0)
 
         self.assertEqual(ssl.OPENSSL_VERSION_INFO, wanted_version)
 
@@ -405,7 +405,7 @@ os91j5H7o/zhdI/JAgMBAAE=
             )
             self.assertEqual(output.strip(), "42")
 
-        with tempfile.TemporaryDirectory(prefix="verify-distribution-") as t:
+        with tempfile.TemporaryDirectory(prefix="disttests-") as t:
             tmpdir = Path(t)
             symlink = tmpdir / "python"
             symlink.symlink_to(sys.executable)
