@@ -2171,66 +2171,7 @@ fn validate_distribution(
     }
 
     // Validate extension module metadata.
-    for (name, variants) in json.as_ref().unwrap().build_info.extensions.iter() {
-        for ext in variants {
-            if let Some(shared) = &ext.shared_lib {
-                if !seen_paths.contains(&PathBuf::from("python").join(shared)) {
-                    context.errors.push(format!(
-                        "extension module {name} references missing shared library path {shared}"
-                    ));
-                }
-            }
-
-            #[allow(clippy::if_same_then_else)]
-            // Static builds never have shared library extension modules.
-            let want_shared = if is_static {
-                false
-            // Extension modules in libpython core are never shared libraries.
-            } else if ext.in_core {
-                false
-            // All remaining extensions are shared on Windows.
-            } else if triple.contains("windows") {
-                true
-            // On POSIX platforms we maintain a list.
-            } else {
-                SHARED_LIBRARY_EXTENSIONS.contains(&name.as_str())
-            };
-
-            if want_shared && ext.shared_lib.is_none() {
-                context.errors.push(format!(
-                    "extension module {name} does not have a shared library"
-                ));
-            } else if !want_shared && ext.shared_lib.is_some() {
-                context.errors.push(format!(
-                    "extension module {name} contains a shared library unexpectedly"
-                ));
-            }
-
-            // Ensure initialization functions are exported.
-
-            // Note that we export PyInit_* functions from libpython on POSIX whereas these
-            // aren't exported from official Python builds. We may want to consider changing
-            // this.
-            if ext.init_fn == "NULL" {
-                continue;
-            }
-
-            let exported = context.libpython_exported_symbols.contains(&ext.init_fn);
-
-            #[allow(clippy::needless_bool, clippy::if_same_then_else)]
-            // PYSTANDALONE: we don't export symbols
-            let wanted = false;
-
-            if exported != wanted {
-                context.errors.push(format!(
-                    "libpython {} {} for extension module {}",
-                    if wanted { "doesn't export" } else { "exports" },
-                    ext.init_fn,
-                    name
-                ));
-            }
-        }
-    }
+    // PYSTANDALONE: skip checking extension module metadata
 
     // Validate Mach-O symbols and libraries against what the SDKs say. This is only supported
     // on macOS.

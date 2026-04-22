@@ -917,74 +917,7 @@ if [ "${PYBUILD_SHARED}" = "1" ]; then
         LIBPYTHON_SHARED_LIBRARY_BASENAME=libpython${PYTHON_MAJMIN_VERSION}${PYTHON_BINARY_SUFFIX}.so.1.0
         LIBPYTHON_SHARED_LIBRARY=${ROOT}/out/python/install/lib/${LIBPYTHON_SHARED_LIBRARY_BASENAME}
 
-        # Although we are statically linking libpython, some extension
-        # modules link against libpython.so even though they are not
-        # supposed to do that. If you try to import them on an
-        # interpreter statically linking libpython, all the symbols they
-        # need are resolved from the main program (because neither glibc
-        # nor musl has two-level namespaces), so there is hopefully no
-        # correctness risk, but they need to be able to successfully
-        # find libpython.so in order to load the module.  To allow such
-        # extensions to load, we set an rpath to point at our lib
-        # directory, so that if anyone ever tries to find a libpython,
-        # they successfully find one. See
-        # https://github.com/astral-sh/python-build-standalone/issues/619
-        # for some reports of extensions that need this workaround.
-        #
-        # Note that this matches the behavior of Debian/Ubuntu/etc.'s
-        # interpreter (if package libpython3.x is installed, which it
-        # usually is thanks to gdb, vim, etc.), because libpython is in
-        # the system lib directory, as well as the behavior in practice
-        # on conda-forge miniconda and probably other Conda-family
-        # Python distributions, which too set an rpath.
-        #
-        # There is a downside of making this libpython locatable: some user
-        # code might do e.g.
-        #     ctypes.CDLL(f"libpython3.{sys.version_info.minor}.so.1.0")
-        # to get at things in the CPython API not exposed to pure
-        # Python. This code may _silently misbehave_ on a
-        # static-libpython interpreter, because you are actually using
-        # the second copy of libpython. For loading static data or using
-        # accessors, you might get lucky and things will work, with the
-        # full set of dangers of C undefined behavior being possible.
-        # However, there are a few reasons we think this risk is
-        # tolerable.  First, we can't actually fix it by not setting the
-        # rpath - user code may well find a system libpython3.x.so or
-        # something which is even more likely to break. Second, this
-        # exact problem happens with Debian, Conda, etc., so it is very
-        # unlikely (compared to the extension modules case above) that
-        # any widely-used code has this problem; the risk is largely
-        # backwards incompatibility of our own builds. Also, it's quite
-        # easy for users to fix: simply do
-        #    ctypes.CDLL(None)
-        # (i.e., dlopen(NULL)), to use symbols already in the process;
-        # this will work reliably on all interpreters regardless of
-        # whether they statically or dynamically link libpython. Finally,
-        # we can (and should, at some point) add a warning, error, or
-        # silent fix to ctypes for user code that does this, which will
-        # also cover the case of other libpython3.x.so files on the
-        # library search path that we cannot suppress.
-        #
-        # In the past, when we dynamically linked libpython, we avoided
-        # using an rpath and instead used a DT_NEEDED entry with
-        # $ORIGIN/../lib/libpython.so, because LD_LIBRARY_PATH takes
-        # precedence over DT_RUNPATH, and it's not uncommon to have an
-        # LD_LIBRARY_PATH that points to some sort of unwanted libpython
-        # (e.g., actions/setup-python does this as of May 2025).
-        # Now, though, because we're not actually using code from the
-        # libpython that's loaded and just need _any_ file of that name
-        # to satisfy the link, that's not a problem. (This also implies
-        # another approach to the problem: ensure that libraries find an
-        # empty dummy libpython.so, which allows the link to succeed but
-        # ensures they do not use any unwanted symbols. That might be
-        # worth doing at some point.)
-        patchelf --force-rpath --set-rpath "\$ORIGIN/../lib" \
-            "${ROOT}/out/python/install/bin/python${PYTHON_MAJMIN_VERSION}"
-
-        if [ -n "${PYTHON_BINARY_SUFFIX}" ]; then
-            patchelf --force-rpath --set-rpath "\$ORIGIN/../lib" \
-                "${ROOT}/out/python/install/bin/python${PYTHON_MAJMIN_VERSION}${PYTHON_BINARY_SUFFIX}"
-        fi
+        # PYSTANDALONE: do not set RPATH
 
         # For libpython3.so (the ABI3 library for embedders), we do
         # still dynamically link libpython3.x.so.1.0 (the
@@ -1249,9 +1182,6 @@ fi
 # Downstream consumers don't require bytecode files. So remove them.
 # Ideally we'd adjust the build system. But meh.
 find "${ROOT}/out/python/install" -type d -name __pycache__ -print0 | xargs -0 rm -rf
-
-# PYSTANDALONE: create an empty file to ensure the include directory exists (we remove the contents later)
-touch "${ROOT}/out/python/install/include/python${PYTHON_MAJMIN_VERSION}/.empty"
 
 # Ensure lib-dynload exists, or Python complains on startup.
 LIB_DYNLOAD=${ROOT}/out/python/install/lib/python${PYTHON_MAJMIN_VERSION}${PYTHON_LIB_SUFFIX}/lib-dynload

@@ -461,6 +461,74 @@ const INSTALL_ONLY_DROP_EXTENSIONS: &[&str] = &[
     "_testsinglephase",
 ];
 
+fn pystandalone_drop(path_bytes: &[u8]) -> bool {
+    // Drop all `__pycache__` files and directories.
+    if path_bytes
+        .windows(b"__pycache__".len())
+        .any(|part| part == b"__pycache__")
+    {
+        return true;
+    }
+
+    // Drop pythonw.exe and the include, share and libs directories
+    if [
+        b"python/install/pythonw.exe".as_slice(),
+        b"python/install/include",
+        b"python/install/share",
+        b"python/install/libs",
+    ]
+    .iter()
+    .any(|prefix| path_bytes.starts_with(prefix))
+    {
+        return true;
+    }
+
+    // Drop anything in `python/install/lib` that isn't `python/install/lib/python`
+    if path_bytes.starts_with(b"python/install/lib")
+        && !path_bytes.starts_with(b"python/install/lib/python")
+    {
+        return true;
+    }
+
+    let module_index = if path_bytes.starts_with(b"python/install/lib/python") {
+        Some(4)
+    } else if path_bytes.starts_with(b"python/install/Lib") {
+        Some(3)
+    } else {
+        None
+    };
+
+    if let Some(module_index) = module_index {
+        if path_bytes
+            .windows(b"_testclinic".len())
+            .any(|part| part == b"_testclinic")
+        {
+            return true;
+        }
+
+        let drop_modules = [
+            b"ensurepip".as_slice(),
+            b"idlelib",
+            b"lib2to3",
+            b"profiling",
+            b"pydoc_data",
+            b"test",
+            b"tkinter",
+            b"turtle",
+            b"turtledemo",
+            b"venv",
+        ];
+
+        if let Some(module_name) = path_bytes.split(|byte| *byte == b'/').nth(module_index) {
+            if drop_modules.contains(&module_name) || module_name.starts_with(b"config-") {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Convert a .tar.zst archive to an install-only .tar.gz archive.
 pub fn convert_to_install_only<W: Write>(reader: impl BufRead, writer: W) -> Result<W> {
     let dctx = zstd::stream::Decoder::new(reader)?;
@@ -504,6 +572,26 @@ pub fn convert_to_install_only<W: Write>(reader: impl BufRead, writer: W) -> Res
         }
     }
 
+    // PYSTANDALONE: create a PYSTANDALONE.json with a few useful fields from PYTHON.json
+    let pystandalone_json = serde_json::to_string(&serde_json::json!({
+        "target_triple": json_main.target_triple,
+        "python_version": json_main.python_version,
+        "python_exe": json_main.python_exe.strip_prefix("install/").unwrap(),
+        "python_stdlib": stdlib_path.strip_prefix("install/").unwrap(),
+        "python_bytecode_magic_number": json_main.python_bytecode_magic_number,
+    }))?;
+
+    builder.append(
+        &{
+            let mut header = tar::Header::new_gnu();
+            header.set_path("python/PYSTANDALONE.json")?;
+            header.set_size(pystandalone_json.len() as u64);
+            header.set_cksum();
+            header
+        },
+        std::io::Cursor::new(pystandalone_json),
+    )?;
+
     for entry in entries {
         let mut entry = entry?;
 
@@ -536,6 +624,11 @@ pub fn convert_to_install_only<W: Write>(reader: impl BufRead, writer: W) -> Res
                 path_bytes.starts_with(package_path.as_bytes())
             })
         {
+            continue;
+        }
+
+        // PYSTANDALONE: drop files we don't care about
+        if pystandalone_drop(&path_bytes) {
             continue;
         }
 
