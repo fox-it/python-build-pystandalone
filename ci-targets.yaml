@@ -146,7 +146,7 @@ windows:
     build_options_conditional:
       - options:
           - freethreaded+pgo
-        minimum-python-version: "3.14"
+        minimum-python-version: "3.13"
 
   x86_64-pc-windows-msvc:
     arch: x86_64
@@ -167,7 +167,7 @@ windows:
     build_options_conditional:
       - options:
           - freethreaded+pgo
-        minimum-python-version: "3.14"
+        minimum-python-version: "3.13"
 
   aarch64-pc-windows-msvc:
     arch: aarch64
@@ -186,4 +186,4 @@ windows:
     build_options_conditional:
       - options:
           - freethreaded+pgo
-        minimum-python-version: "3.14"
+        minimum-python-version: "3.13"

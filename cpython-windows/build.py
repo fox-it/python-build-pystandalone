@@ -30,6 +30,7 @@ from pythonbuild.static import (
     convert_to_static_library,
     copy_link_to_lib,
     hack_source_files,
+    link_builtin_extensions_into_executables,
     remove_from_config_c,
     remove_from_extension_modules,
 )
@@ -751,6 +752,8 @@ def hack_project_files(
 
     pythoncore_proj = pcbuild_path / "pythoncore.vcxproj"
 
+    converted_builtin_extensions: list[str] = []
+
     for extension, entry in sorted(CONVERT_TO_BUILTIN_EXTENSIONS.items()):
         if entry.get("ignore_static") or extension in DISABLED_EXTENSIONS:
             log("ignoring extension %s in static builds" % extension)
@@ -760,6 +763,14 @@ def hack_project_files(
 
         if convert_to_static_library(cpython_source_path, extension, entry, False):
             add_to_config_c(cpython_source_path, extension, init_fn)
+            converted_builtin_extensions.append(extension)
+
+    # Link each built-in extension's static library directly into
+    # python.exe / pythonw.exe to resolve the PyInit_* references in
+    # PC/config.c.
+    link_builtin_extensions_into_executables(
+        cpython_source_path, converted_builtin_extensions
+    )
 
     # pythoncore.vcxproj produces libpython. Typically pythonXY.dll. We change
     # it to produce a static library.
@@ -834,6 +845,17 @@ def hack_pystandalone_files(source_path: pathlib.Path, python_version: str):
 
     # PYSTANDALONE: add pystandalone module to config.c
     add_to_config_c(source_path, "_pystandalone", "PyInit__pystandalone")
+
+    # Register _pystandalone in pcbuild.proj's ExtensionModules list so
+    # MSBuild picks it up via `<Projects Include="@(ExtensionModules->'%(Identity).vcxproj')" />`.
+    pcbuild_proj_path = source_path / "PCbuild" / "pcbuild.proj"
+    pcbuild_proj_text = pcbuild_proj_path.read_text(encoding="utf8")
+    if "_pystandalone" not in pcbuild_proj_text:
+        static_replace_in_file(
+            pcbuild_proj_path,
+            b'<ExtensionModules Include="_asyncio',
+            b'<ExtensionModules Include="_pystandalone;_asyncio',
+        )
 
     # PYSTANDALONE: apply patches to Python source
     python_major_minor_version = python_version.rsplit(".", 1)[0]
@@ -1693,17 +1715,6 @@ def build_cpython(
             arch=arch,
         )
         hack_source_files(cpython_source_path, python_version=python_version)
-
-        # CPython 3.13+ renamed PC/pyconfig.h to PC/pyconfig.h.in and
-        # generates pyconfig.h at build time via the _UpdatePyconfig target
-        # in pythoncore.vcxproj.  Since we reorder extensions to build
-        # before pythoncore, pyconfig.h does not exist yet when extensions
-        # compile.  Pre-generate it so the PC/ include-path entry works.
-        pyconfig_h = cpython_source_path / "PC" / "pyconfig.h"
-        pyconfig_h_in = cpython_source_path / "PC" / "pyconfig.h.in"
-        if not pyconfig_h.exists() and pyconfig_h_in.exists():
-            log("pre-generating PC/pyconfig.h from PC/pyconfig.h.in")
-            pyconfig_h.write_bytes(pyconfig_h_in.read_bytes())
 
         if pgo:
             # PYSTANDALONE: build once to regenerate the frozen zipimport

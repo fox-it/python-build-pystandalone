@@ -227,150 +227,87 @@ def convert_to_static_library(
             "    </ProjectReference>",
         ]
 
-    # Ensure the extension project doesn't depend on pythoncore: as a built-in
-    # extension, pythoncore will depend on it.
-
-    # This logic is a bit hacky. Ideally we'd parse the file as XML and operate
-    # in the XML domain. But that is more work. The goal here is to strip the
-    # <ProjectReference>...</ProjectReference> containing the
-    # <Project>{pythoncore ID}</Project>. This could leave an item <ItemGroup>.
-    # That should be fine.
-    start_line, end_line = None, None
-    for i, line in enumerate(lines):
-        if "<Project>{cf7ac3d1-e2df-41d2-bea6-1e2556cdea26}</Project>" in line:
-            for j in range(i, 0, -1):
-                if "<ProjectReference" in lines[j]:
-                    start_line = j
-                    break
-
-            for j in range(i, len(lines) - 1):
-                if "</ProjectReference>" in lines[j]:
-                    end_line = j
-                    break
-
-            break
-
-    if start_line is not None and end_line is not None:
-        log("stripping pythoncore dependency from %s" % extension)
-        for line in lines[start_line : end_line + 1]:
-            log(line)
-
-        lines = lines[:start_line] + lines[end_line + 1 :]
-
+    # Preserve the natural dependency graph: extensions depend on
+    # pythoncore.  This ensures pythoncore's _UpdatePyconfig target runs
+    # before any extension compiles, so pyconfig.h exists in pythoncore's
+    # IntDir and extensions see a consistent, correctly-substituted copy
+    # via GeneratedPyConfigDir on /I.
+    #
+    # pythoncore.lib therefore does not contain extension objs; the final
+    # executables (python.exe, pythonw.exe) link each extension's .lib
+    # directly to resolve the PyInit_* symbols referenced by PC/config.c.
+    # See `link_builtin_extensions_into_executables` below.
     with proj_path.open("w", encoding="utf8") as fh:
         fh.write("\n".join(lines))
 
-    # Tell pythoncore to link against the static .lib.
-    RE_ADDITIONAL_DEPENDENCIES = re.compile(
-        "<AdditionalDependencies>([^<]+)</AdditionalDependencies>"
-    )
-
-    pythoncore_path = source_path / "PCbuild" / "pythoncore.vcxproj"
-    lines = []
-
-    with pythoncore_path.open("r", encoding="utf8") as fh:
-        for line in fh:
-            line = line.rstrip()
-
-            m = RE_ADDITIONAL_DEPENDENCIES.search(line)
-
-            if m:
-                log("changing pythoncore to link against %s.lib" % extension)
-                # TODO we shouldn't need this with static linking if the
-                # project is configured to link library dependencies.
-                # But removing it results in unresolved external symbols
-                # when linking the python project. There /might/ be a
-                # visibility issue with the PyMODINIT_FUNC macro.
-                line = line.replace(
-                    m.group(1), r"$(OutDir)%s.lib;%s" % (extension, m.group(1))
-                )
-
-            lines.append(line)
-
-    with pythoncore_path.open("w", encoding="utf8") as fh:
-        fh.write("\n".join(lines))
-
-    # Change pythoncore to depend on the extension project.
-
-    # pcbuild.proj is the file that matters for msbuild. And order within
-    # matters. We remove the extension from the "ExtensionModules" set of
-    # projects. Then we re-add the project to before "pythoncore."
-    remove_from_extension_modules(source_path, extension)
-
-    pcbuild_proj_path = source_path / "PCbuild" / "pcbuild.proj"
-
-    with pcbuild_proj_path.open("r", encoding="utf8") as fh:
-        data = fh.read()
-
-    data = data.replace(
-        '<Projects Include="pythoncore.vcxproj">',
-        '    <Projects Include="%s.vcxproj" />\n    <Projects Include="pythoncore.vcxproj">'
-        % extension,
-    )
-
-    with pcbuild_proj_path.open("w", encoding="utf8") as fh:
-        fh.write(data)
-
-    # We don't technically need to modify the solution since msbuild doesn't
-    # use it. But it enables debugging inside Visual Studio, which is
-    # convenient.
-    RE_PROJECT = re.compile(
-        r'Project\("\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942\}"\) = "([^"]+)", "[^"]+", "{([^\}]+)\}"'
-    )
-
-    pcbuild_sln_path = source_path / "PCbuild" / "pcbuild.sln"
-    lines = []
-
-    extension_id = None
-    pythoncore_line = None
-
-    with pcbuild_sln_path.open("r", encoding="utf8") as fh:
-        # First pass buffers the file, finds the ID of the extension project,
-        # and finds where the pythoncore project is defined.
-        for i, line in enumerate(fh):
-            line = line.rstrip()
-
-            m = RE_PROJECT.search(line)
-
-            if m and m.group(1) == extension:
-                extension_id = m.group(2)
-
-            if m and m.group(1) == "pythoncore":
-                pythoncore_line = i
-
-            lines.append(line)
-
-    # Not all projects are in the solution(!!!). Since we don't use the
-    # solution for building, that's fine to ignore.
-    if not extension_id:
-        log("failed to find project %s in solution" % extension)
-
-    if not pythoncore_line:
-        log("failed to find pythoncore project in solution")
-
-    if extension_id and pythoncore_line:
-        log("making pythoncore depend on %s" % extension)
-
-        needs_section = (
-            not lines[pythoncore_line + 1].lstrip().startswith("ProjectSection")
-        )
-        offset = 1 if needs_section else 2
-
-        lines.insert(
-            pythoncore_line + offset, "\t\t{%s} = {%s}" % (extension_id, extension_id)
-        )
-
-        if needs_section:
-            lines.insert(
-                pythoncore_line + 1,
-                "\tProjectSection(ProjectDependencies) = postProject",
-            )
-            lines.insert(pythoncore_line + 3, "\tEndProjectSection")
-
-        with pcbuild_sln_path.open("w", encoding="utf8") as fh:
-            fh.write("\n".join(lines))
-
     return True
+
+
+def link_builtin_extensions_into_executables(
+    source_path: pathlib.Path, extensions: list[str]
+):
+    """Make python.exe / pythonw.exe link against each built-in extension's
+    static library.
+
+    python.vcxproj / pythonw.vcxproj inherit their link settings from
+    pyproject.props and do not declare an `<AdditionalDependencies>`
+    element.  Inject one just before the closing `</Link>` listing
+    `$(OutDir)<ext>.lib` for every converted extension so the linker
+    resolves the `PyInit_*` symbols referenced by PC/config.c.
+    """
+
+    if not extensions:
+        return
+
+    additional = ";".join("$(OutDir)%s.lib" % ext for ext in extensions)
+    injected_line = (
+        "      <AdditionalDependencies>"
+        "%s;%%(AdditionalDependencies)"
+        "</AdditionalDependencies>"
+    ) % additional
+
+    for exe_proj_name in ("python", "pythonw", "_freeze_importlib"):
+        exe_path = source_path / "PCbuild" / ("%s.vcxproj" % exe_proj_name)
+        if not exe_path.exists():
+            log("skipping %s.vcxproj: not present" % exe_proj_name)
+            continue
+
+        with exe_path.open("r", encoding="utf8") as fh:
+            data = fh.read()
+
+        # Detect likely newline style so we can preserve it.
+        newline = "\r\n" if "\r\n" in data else "\n"
+
+        closing = newline + "    </Link>"
+        if closing not in data:
+            log(
+                "warning: no </Link> tag found in %s.vcxproj; "
+                "built-in extensions will not link into %s.exe"
+                % (exe_proj_name, exe_proj_name)
+            )
+            continue
+
+        # Insert only once (idempotent).
+        if "<!-- PYSTANDALONE_BUILTIN_EXT_LIBS -->" in data:
+            log("skipping %s.vcxproj: already patched" % exe_proj_name)
+            continue
+
+        replacement = (
+            newline
+            + injected_line
+            + newline
+            + "      <!-- PYSTANDALONE_BUILTIN_EXT_LIBS -->"
+            + newline
+            + "    </Link>"
+        )
+        data = data.replace(closing, replacement, 1)
+
+        log(
+            "linking %d built-in extension lib(s) into %s.exe"
+            % (len(extensions), exe_proj_name)
+        )
+        with exe_path.open("w", encoding="utf8") as fh:
+            fh.write(data)
 
 
 def copy_link_to_lib(p: pathlib.Path):
