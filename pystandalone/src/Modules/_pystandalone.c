@@ -15,6 +15,14 @@
 #define EVP_CTRL_AEAD_SET_TAG   EVP_CTRL_GCM_SET_TAG
 #endif
 
+// Some compatibility defines for CPython < 3.13
+
+#if PY_VERSION_HEX < 0x030d0000
+typedef struct { int v; } PyMutex;
+#define PyMutex_Lock(m) ((void)(m))
+#define PyMutex_Unlock(m) ((void)(m))
+#endif
+
 // Some compatibility defines for CPython < 3.11
 
 #ifndef _PyCFunction_CAST
@@ -59,6 +67,7 @@ get_pystandalone_state(PyObject *module)
 
 typedef struct {
     PyObject_HEAD
+    PyMutex              mutex;
     EVP_CIPHER_CTX      *ctx;   /* OpenSSL cipher context */
     unsigned char        key[EVP_MAX_KEY_LENGTH];
     unsigned char        iv[EVP_MAX_IV_LENGTH];
@@ -68,6 +77,7 @@ typedef struct {
 
 typedef struct {
     PyObject_HEAD
+    PyMutex              mutex;
     EVP_PKEY_CTX        *ctx;   /* OpenSSL pkey context */
 } PublicKey;
 
@@ -239,6 +249,8 @@ _Cipher_new(PyObject *module, const EVP_CIPHER *cipher, Py_buffer *key, Py_buffe
     if (self == NULL) {
         return NULL;
     }
+
+    self->mutex = (PyMutex){0};
 
     self->ctx = EVP_CIPHER_CTX_new();
     if (self->ctx == NULL) {
@@ -480,7 +492,10 @@ static PyObject *
 _pystandalone_Cipher_encrypt_impl(Cipher *self, Py_buffer *data)
 /*[clinic end generated code: output=905ce94ccf6e0082 input=17d62fae407625b9]*/
 {
-    return _Cipher_crypt(self, data, CIPHER_MODE_ENCRYPT);
+    PyMutex_Lock(&self->mutex);
+    PyObject *res = _Cipher_crypt(self, data, CIPHER_MODE_ENCRYPT);
+    PyMutex_Unlock(&self->mutex);
+    return res;
 }
 
 /*[clinic input]
@@ -497,16 +512,22 @@ _pystandalone_Cipher_encrypt_and_digest_impl(Cipher *self, Py_buffer *data)
 {
     PyObject *buf, *digest;
 
+    PyMutex_Lock(&self->mutex);
+
     buf = _Cipher_crypt(self, data, CIPHER_MODE_ENCRYPT);
     if (buf == NULL) {
+        PyMutex_Unlock(&self->mutex);
         return NULL;
     }
 
     digest = _Cipher_get_tag(self);
     if (digest == NULL) {
+        PyMutex_Unlock(&self->mutex);
         Py_DECREF(buf);
         return NULL;
     }
+
+    PyMutex_Unlock(&self->mutex);
 
     return PyTuple_Pack(2, buf, digest);
 }
@@ -523,7 +544,10 @@ static PyObject *
 _pystandalone_Cipher_decrypt_impl(Cipher *self, Py_buffer *data)
 /*[clinic end generated code: output=dd94f41ddbeaccf7 input=363abf129f94df00]*/
 {
-    return _Cipher_crypt(self, data, CIPHER_MODE_DECRYPT);
+    PyMutex_Lock(&self->mutex);
+    PyObject *res = _Cipher_crypt(self, data, CIPHER_MODE_DECRYPT);
+    PyMutex_Unlock(&self->mutex);
+    return res;
 }
 
 /*[clinic input]
@@ -544,15 +568,21 @@ _pystandalone_Cipher_decrypt_and_verify_impl(Cipher *self, Py_buffer *data,
 {
     PyObject *buf;
 
+    PyMutex_Lock(&self->mutex);
+
     buf = _Cipher_crypt(self, data, CIPHER_MODE_DECRYPT);
     if (buf == NULL) {
+        PyMutex_Unlock(&self->mutex);
         return NULL;
     }
 
     if (_Cipher_verify_tag(self, tag) == NULL) {
+        PyMutex_Unlock(&self->mutex);
         Py_DECREF(buf);
         return NULL;
     }
+
+    PyMutex_Unlock(&self->mutex);
 
     return buf;
 }
@@ -569,7 +599,10 @@ static PyObject *
 _pystandalone_Cipher_update_impl(Cipher *self, Py_buffer *data)
 /*[clinic end generated code: output=8aea00e2c0e763eb input=ce774ce7ddc5e8c9]*/
 {
-    return _Cipher_update_ad(self, data);
+    PyMutex_Lock(&self->mutex);
+    PyObject *res = _Cipher_update_ad(self, data);
+    PyMutex_Unlock(&self->mutex);
+    return res;
 }
 
 /*[clinic input]
@@ -582,7 +615,10 @@ static PyObject *
 _pystandalone_Cipher_digest_impl(Cipher *self)
 /*[clinic end generated code: output=ca0c92f67a3aac6d input=d92ff14e2380d3e4]*/
 {
-    return _Cipher_get_tag(self);
+    PyMutex_Lock(&self->mutex);
+    PyObject *res = _Cipher_get_tag(self);
+    PyMutex_Unlock(&self->mutex);
+    return res;
 }
 
 /*[clinic input]
@@ -597,7 +633,10 @@ static PyObject *
 _pystandalone_Cipher_verify_impl(Cipher *self, Py_buffer *tag)
 /*[clinic end generated code: output=2c8e2d72c015c078 input=cf4d4fd1a495c7f7]*/
 {
-    return _Cipher_verify_tag(self, tag);
+    PyMutex_Lock(&self->mutex);
+    PyObject *res = _Cipher_verify_tag(self, tag);
+    PyMutex_Unlock(&self->mutex);
+    return res;
 }
 
 /*[clinic input]
@@ -610,7 +649,9 @@ static PyObject *
 _pystandalone_Cipher_clean_impl(Cipher *self)
 /*[clinic end generated code: output=fa8d7c88cbdea4c8 input=e334120cdcc73ca7]*/
 {
+    PyMutex_Lock(&self->mutex);
     _Cipher_clean(self);
+    PyMutex_Unlock(&self->mutex);
     Py_RETURN_NONE;
 }
 
@@ -629,22 +670,28 @@ static PyMethodDef Cipher_methods[] = {
 static PyObject *
 Cipher_get_initialized(Cipher *self, void *closure)
 {
-    PyObject * res = self->state == CIPHER_STATE_INIT ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    PyMutex_Lock(&self->mutex);
+    int initialized = self->state == CIPHER_STATE_INIT;
+    PyMutex_Unlock(&self->mutex);
+    return PyBool_FromLong(initialized);
 }
 
 static PyObject *
 Cipher_get_finalized(Cipher *self, void *closure)
 {
-    PyObject * res = self->state == CIPHER_STATE_FINAL ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    PyMutex_Lock(&self->mutex);
+    int finalized = self->state == CIPHER_STATE_FINAL;
+    PyMutex_Unlock(&self->mutex);
+    return PyBool_FromLong(finalized);
 }
 
 static PyObject *
 Cipher_get_cleaned(Cipher *self, void *closure)
 {
-    PyObject * res = self->state == CIPHER_STATE_CLEAR ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    PyMutex_Lock(&self->mutex);
+    int cleaned = self->state == CIPHER_STATE_CLEAR;
+    PyMutex_Unlock(&self->mutex);
+    return PyBool_FromLong(cleaned);
 }
 
 static PyObject *
@@ -700,11 +747,13 @@ Cipher_repr(Cipher *self)
 static void
 Cipher_dealloc(Cipher *self)
 {
+    PyTypeObject *tp = Py_TYPE(self);
     EVP_CIPHER_CTX_cleanup(self->ctx);
     EVP_CIPHER_CTX_free(self->ctx);
     OPENSSL_cleanse(self->key, sizeof(self->key));
     OPENSSL_cleanse(self->iv, sizeof(self->iv));
-    PyObject_Del(self);
+    PyObject_Free(self);
+    Py_DECREF(tp);
 }
 
 static int
@@ -810,6 +859,8 @@ _PublicKey_new(PyObject *module, EVP_PKEY *key)
         return NULL;
     }
 
+    self->mutex = (PyMutex){0};
+
     self->ctx = EVP_PKEY_CTX_new(key, NULL);
     if (self->ctx == NULL) {
         PyErr_NoMemory();
@@ -850,23 +901,30 @@ _pystandalone_PublicKey_encrypt_impl(PublicKey *self, Py_buffer *data)
     size_t out_len;
     unsigned char *out_buf;
 
+    PyMutex_Lock(&self->mutex);
+
     if (!EVP_PKEY_encrypt(self->ctx, NULL, &out_len, data->buf, data->len)) {
+        PyMutex_Unlock(&self->mutex);
         _set_exception(PyExc_ValueError);
         return NULL;
     }
 
     buf = PyBytes_FromStringAndSize(NULL, out_len);
     if (buf == NULL) {
+        PyMutex_Unlock(&self->mutex);
         PyErr_NoMemory();
         return NULL;
     }
 
     out_buf = (unsigned char *)PyBytes_AS_STRING(buf);
     if (!EVP_PKEY_encrypt(self->ctx, out_buf, &out_len, data->buf, data->len)) {
+        PyMutex_Unlock(&self->mutex);
         _set_exception(PyExc_ValueError);
         Py_DECREF(buf);
         return NULL;
     }
+
+    PyMutex_Unlock(&self->mutex);
 
     return buf;
 }
@@ -977,8 +1035,10 @@ PublicKey_repr(PublicKey *self)
 static void
 PublicKey_dealloc(PublicKey *self)
 {
+    PyTypeObject *tp = Py_TYPE(self);
     EVP_PKEY_CTX_free(self->ctx);
-    PyObject_Del(self);
+    PyObject_Free(self);
+    Py_DECREF(tp);
 }
 
 static int
@@ -1132,8 +1192,7 @@ static PyObject *
 _pystandalone_has_library_impl(PyObject *module)
 /*[clinic end generated code: output=04238eaa01e29446 input=3272862d1d74a71a]*/
 {
-    PyObject *res = PyStandalone_HasLibrary() ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    return PyBool_FromLong(PyStandalone_HasLibrary());
 }
 
 /*[clinic input]
@@ -1146,8 +1205,7 @@ static PyObject *
 _pystandalone_has_bootstrap_impl(PyObject *module)
 /*[clinic end generated code: output=a5e616490f5e50c9 input=24807adbd6092d18]*/
 {
-    PyObject *res = PyStandalone_HasBootstrap() ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    return PyBool_FromLong(PyStandalone_HasBootstrap());
 }
 
 /*[clinic input]
@@ -1160,8 +1218,7 @@ static PyObject *
 _pystandalone_has_payload_impl(PyObject *module)
 /*[clinic end generated code: output=3f6b9eeea5cb6ba3 input=338fbe7842bbb2dd]*/
 {
-    PyObject *res = PyStandalone_HasPayload() ? Py_True : Py_False;
-    return Py_INCREF(res), res;
+    return PyBool_FromLong(PyStandalone_HasPayload());
 }
 
 /* List of functions exported by this module */
@@ -1306,6 +1363,9 @@ _pystandalone_free(void *module)
 static struct PyModuleDef_Slot _pystandalone_slots[] = {
     {Py_mod_exec, _pystandalone_init_types},
     {Py_mod_exec, _pystandalone_init_cipher_names},
+#ifdef Py_GIL_DISABLED
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
     {0, NULL}
 };
 
