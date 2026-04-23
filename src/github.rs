@@ -474,6 +474,27 @@ pub async fn command_upload_release_distributions(args: &ArgMatches) -> Result<(
 
     let missing = wanted_filenames
         .keys()
+        // PYSTANDALONE: filter out distributions we don't build
+        .filter(|x| {
+            !x.contains("-debug-")
+                && !x.contains("-debug+static-")
+                && !x.contains("-noopt-")
+                && !x.contains("-noopt+static-")
+                && !x.contains("-freethreaded-")
+                && !x.contains("-freethreaded+noopt-")
+                && !x.contains("-freethreaded+debug-")
+                && !x.contains("-freethreaded+pgo-")
+                && !x.contains("-freethreaded+lto-")
+                && !x.contains("-freethreaded+pgo+lto-")
+                && !x.contains("-armv7-unknown-linux-")
+                && !x.contains("-ppc64le-unknown-linux-")
+                && !x.contains("-riscv64-unknown-linux-")
+                && !x.contains("-s390x-unknown-linux-")
+                && !x.contains("-x86_64_v2-unknown-linux-")
+                && !x.contains("-x86_64_v3-unknown-linux-")
+                && !x.contains("-x86_64_v4-unknown-linux-")
+                && !x.contains("-musl-lto-")
+        })
         .filter(|x| !filenames.contains(*x))
         .collect::<Vec<_>>();
 

@@ -312,7 +312,8 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
         "x86_64-unknown-linux-musl",
         TripleRelease {
             suffixes: linux_suffixes_musl.clone(),
-            install_only_suffix: "lto",
+            // PYSTANDALONE: promote the static build to the install_only artifact
+            install_only_suffix: "lto+static",
             freethreaded_install_only_suffix: "freethreaded+lto",
             python_version_requirement: None,
             conditional_suffixes: vec![ConditionalSuffixes {
