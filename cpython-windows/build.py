@@ -1387,20 +1387,9 @@ def collect_python_build_artifacts(
 
         return set()
 
-    if arch == "amd64":
-        abi_platform = "win_amd64"
-    elif arch == "win32":
-        abi_platform = "win32"
-    elif arch == "arm64":
-        abi_platform = "win_arm64"
-    else:
-        raise Exception("unhandled architecture: %s" % arch)
-
     if freethreaded:
-        abi_tag = ".cp%st-%s" % (python_majmin, abi_platform)
         lib_suffix = "t"
     else:
-        abi_tag = ""
         lib_suffix = ""
 
     # Copy object files for core sources into their own directory.
@@ -1515,15 +1504,14 @@ def collect_python_build_artifacts(
         res["extensions"][ext] = [entry]
 
         # Copy the extension static library.
-        ext_static = outputs_path / ("%s%s.lib" % (ext, abi_tag))
-        dest = dest_dir / ("%s%s.lib" % (ext, abi_tag))
+        ext_static = outputs_path / ("%s.lib" % ext)
+        dest = dest_dir / ("%s.lib" % ext)
         log("copying static extension %s" % ext_static)
         shutil.copyfile(ext_static, dest)
 
-        res["extensions"][ext][0]["static_lib"] = "build/extensions/%s/%s%s.lib" % (
+        res["extensions"][ext][0]["static_lib"] = "build/extensions/%s/%s.lib" % (
             ext,
             ext,
-            abi_tag,
         )
 
     lib_dir = out_dir / "build" / "lib"
