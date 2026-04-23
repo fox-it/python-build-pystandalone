@@ -109,6 +109,7 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
     );
 
     // Windows.
+    // PYSTANDALONE: we can only build freethreaded on >= 3.14
     h.insert(
         "i686-pc-windows-msvc",
         TripleRelease {
@@ -117,7 +118,7 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
             freethreaded_install_only_suffix: "freethreaded+pgo",
             python_version_requirement: None,
             conditional_suffixes: vec![ConditionalSuffixes {
-                python_version_requirement: VersionSpecifier::from_str(">=3.13").unwrap(),
+                python_version_requirement: VersionSpecifier::from_str(">=3.14").unwrap(),
                 suffixes: vec!["freethreaded+pgo"],
             }],
         },
@@ -130,7 +131,7 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
             freethreaded_install_only_suffix: "freethreaded+pgo",
             python_version_requirement: None,
             conditional_suffixes: vec![ConditionalSuffixes {
-                python_version_requirement: VersionSpecifier::from_str(">=3.13").unwrap(),
+                python_version_requirement: VersionSpecifier::from_str(">=3.14").unwrap(),
                 suffixes: vec!["freethreaded+pgo"],
             }],
         },
@@ -143,7 +144,7 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
             freethreaded_install_only_suffix: "freethreaded+pgo",
             python_version_requirement: Some(VersionSpecifier::from_str(">=3.11").unwrap()),
             conditional_suffixes: vec![ConditionalSuffixes {
-                python_version_requirement: VersionSpecifier::from_str(">=3.13").unwrap(),
+                python_version_requirement: VersionSpecifier::from_str(">=3.14").unwrap(),
                 suffixes: vec!["freethreaded+pgo"],
             }],
         },
@@ -312,7 +313,8 @@ pub static RELEASE_TRIPLES: Lazy<BTreeMap<&'static str, TripleRelease>> = Lazy::
         "x86_64-unknown-linux-musl",
         TripleRelease {
             suffixes: linux_suffixes_musl.clone(),
-            install_only_suffix: "lto",
+            // PYSTANDALONE: promote the static build to the install_only artifact
+            install_only_suffix: "lto+static",
             freethreaded_install_only_suffix: "freethreaded+lto",
             python_version_requirement: None,
             conditional_suffixes: vec![ConditionalSuffixes {
