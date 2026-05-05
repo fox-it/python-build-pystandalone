@@ -16,6 +16,7 @@ from packaging.version import Version
 
 CI_TARGETS_YAML = "ci-targets.yaml"
 CI_RUNNERS_YAML = "ci-runners.yaml"
+CI_DEFAULTS_YAML = "ci-defaults.yaml"
 CI_EXTRA_SKIP_LABELS = ["documentation"]
 CI_MATRIX_SIZE_LIMIT = 256  # The maximum size of a matrix in GitHub Actions
 
@@ -40,7 +41,7 @@ def meets_conditional_version(version: str, min_version: str) -> bool:
 
 
 def parse_labels(labels: str | None) -> dict[str, set[str]]:
-    """Parse labels into a dict of category filters."""
+    """Parse labels into a dict of category -> set of values."""
     if not labels:
         return {}
 
@@ -75,30 +76,157 @@ def parse_labels(labels: str | None) -> dict[str, set[str]]:
     return result
 
 
-def should_include_entry(entry: dict[str, str], filters: dict[str, set[str]]) -> bool:
-    """Check if an entry satisfies the label filters."""
-    if filters.get("directives") and "skip" in filters["directives"]:
+def get_all_build_options(ci_config: dict[str, Any], target_triple: str) -> list[str]:
+    """Get all build options (including conditional) for a target from ci-targets.yaml."""
+    for platform_config in ci_config.values():
+        if target_triple in platform_config:
+            config = platform_config[target_triple]
+            options = list(config["build_options"])
+            for conditional in config.get("build_options_conditional", []):
+                options.extend(conditional["options"])
+            return options
+    raise KeyError(f"Target triple {target_triple!r} not found in ci-targets.yaml")
+
+
+def find_target_platform(ci_config: dict[str, Any], target_triple: str) -> str:
+    """Find which platform a target triple belongs to in ci-targets.yaml."""
+    for platform, platform_config in ci_config.items():
+        if target_triple in platform_config:
+            return platform
+    raise KeyError(f"Target triple {target_triple!r} not found in ci-targets.yaml")
+
+
+def expand_default_triples(
+    ci_config: dict[str, Any],
+    pull_request_defaults: dict[str, Any],
+    labels: dict[str, set[str]],
+) -> set[str]:
+    """Compute the set of allowed target triples for a pull request.
+
+    Starts from the explicit defaults in ci-defaults.yaml. When a target
+    dimension has an :all label, that dimension is relaxed and additional
+    triples from ci-targets.yaml that match on the non-expanded dimensions
+    are included.
+    """
+    default_triples = set(pull_request_defaults["targets"])
+
+    platform_labels = labels.get("platform", set())
+    arch_labels = labels.get("arch", set())
+    libc_labels = labels.get("libc", set())
+
+    platform_filters = platform_labels - {"all"}
+    arch_filters = arch_labels - {"all"}
+    libc_filters = libc_labels - {"all"}
+
+    expand_platform = "all" in platform_labels or bool(platform_filters)
+    expand_arch = "all" in arch_labels or bool(arch_filters)
+    expand_libc = "all" in libc_labels or bool(libc_filters)
+
+    if not (expand_platform or expand_arch or expand_libc):
+        return default_triples
+
+    # Build reference tuples from the default triples.
+    default_attrs = []
+    for triple in default_triples:
+        platform = find_target_platform(ci_config, triple)
+        config = ci_config[platform][triple]
+        default_attrs.append(
+            (
+                platform,
+                config["arch"],
+                config.get("arch_variant"),
+                config.get("libc"),
+            )
+        )
+
+    # Include any triple whose non-expanded dimensions match a default.
+    allowed = set(default_triples)
+    for platform, platform_config in ci_config.items():
+        for triple, config in platform_config.items():
+            for d_platform, d_arch, d_arch_variant, d_libc in default_attrs:
+                if platform_filters:
+                    if platform not in platform_filters:
+                        continue
+                elif "all" not in platform_labels and platform != d_platform:
+                    continue
+
+                if arch_filters:
+                    if config["arch"] not in arch_filters:
+                        continue
+                    if config.get("arch_variant") != d_arch_variant:
+                        continue
+                elif "all" not in arch_labels and (
+                    config["arch"] != d_arch
+                    or config.get("arch_variant") != d_arch_variant
+                ):
+                    continue
+
+                if libc_filters:
+                    if config.get("libc") not in libc_filters:
+                        continue
+                elif "all" not in libc_labels and config.get("libc") != d_libc:
+                    continue
+                allowed.add(triple)
+                break
+
+    return allowed
+
+
+def should_include_entry(
+    entry: dict[str, str],
+    labels: dict[str, set[str]],
+    pull_request_defaults: dict[str, Any] | None = None,
+    allowed_triples: set[str] | None = None,
+) -> bool:
+    """Check if a matrix entry should be included.
+
+    For pull requests, entries are restricted to the allowed target set
+    (computed by expand_default_triples), the default python version, and
+    the curated build options — unless overridden by labels. For pushes
+    (pull_request_defaults is None), only label filters apply.
+    """
+    if pull_request_defaults is not None:
+        triple = entry["target_triple"]
+        default_targets = pull_request_defaults["targets"]
+
+        # Target must be in the allowed set.
+        if allowed_triples is not None and triple not in allowed_triples:
+            return False
+
+        # Python: restrict to default version unless python labels override.
+        if not labels.get("python"):
+            if entry["python"] != pull_request_defaults["python_version"]:
+                return False
+
+        # Build options: restrict to curated defaults for default triples
+        # unless build labels override. Non-default triples (brought in by
+        # :all expansion) are unrestricted.
+        if not labels.get("build") and triple in default_targets:
+            if entry["build_options"] not in default_targets[triple]["build_options"]:
+                return False
+
+    # Label filters
+    platform_filters = labels.get("platform", set()) - {"all"}
+    if platform_filters and entry["platform"] not in platform_filters:
         return False
 
-    if filters.get("platform") and entry["platform"] not in filters["platform"]:
+    python_filters = labels.get("python", set()) - {"all"}
+    if python_filters and entry["python"] not in python_filters:
         return False
 
-    if filters.get("python") and entry["python"] not in filters["python"]:
+    arch_filters = labels.get("arch", set()) - {"all"}
+    if arch_filters and entry["arch"] not in arch_filters:
         return False
 
-    if filters.get("arch") and entry["arch"] not in filters["arch"]:
+    libc_filters = labels.get("libc", set()) - {"all"}
+    if libc_filters and entry.get("libc") and entry["libc"] not in libc_filters:
         return False
 
-    if (
-        filters.get("libc")
-        and entry.get("libc")
-        and entry["libc"] not in filters["libc"]
-    ):
-        return False
-
-    if filters.get("build"):
-        build_options = set(entry.get("build_options", "").split("+"))
-        if not all(f in build_options for f in filters["build"]):
+    build_filters = labels.get("build", set()) - {"all"}
+    if build_filters:
+        build_components = set(entry.get("build_options", "").split("+"))
+        required = {c for f in build_filters for c in f.split("+")}
+        if not required.issubset(build_components):
             return False
 
     return True
@@ -106,17 +234,32 @@ def should_include_entry(entry: dict[str, str], filters: dict[str, set[str]]) ->
 
 def generate_docker_matrix_entries(
     runners: dict[str, Any],
+    python_entries: list[dict[str, str]],
     platform_filter: str | None = None,
     free_runners: bool = False,
 ) -> list[dict[str, str]]:
-    """Generate matrix entries for docker image builds."""
+    """Generate matrix entries for Docker image builds."""
     if platform_filter and platform_filter != "linux":
         return []
 
+    needed_archs = {
+        runners[entry["runner"]]["arch"]
+        for entry in python_entries
+        if entry.get("platform") == "linux"
+    }
+
     matrix_entries = []
     for image in DOCKER_BUILD_IMAGES:
+<<<<<<< HEAD
         # Find appropriate runner for Linux platform with the specified architecture
         runner = find_runner(runners, "linux", image["arch"], free_runners)
+=======
+        if image["arch"] not in needed_archs:
+            continue
+
+        # Find appropriate runner for Linux platform with the specified architecture.
+        runner = find_runner(runners, "linux", image["arch"], False)
+>>>>>>> refs/tags/20260504
 
         entry = {
             "name": image["name"],
@@ -202,14 +345,6 @@ def generate_python_build_matrix_entries(
                 label_filters.get("directives", set()) if label_filters else set(),
                 free_runners,
             )
-
-    # Apply label filters if present
-    if label_filters:
-        matrix_entries = [
-            entry
-            for entry in matrix_entries
-            if should_include_entry(entry, label_filters)
-        ]
 
     return matrix_entries
 
@@ -327,6 +462,50 @@ def add_python_build_entries_for_config(
                 matrix_entries.append(entry)
 
 
+def validate_pull_request_defaults(
+    ci_config: dict[str, Any], pull_request_defaults: dict[str, Any]
+) -> None:
+    """Validate the pull_request defaults in ci-defaults.yaml."""
+    all_triples = set()
+    for platform_config in ci_config.values():
+        all_triples.update(platform_config.keys())
+
+    for triple in pull_request_defaults["targets"]:
+        if triple not in all_triples:
+            print(
+                f"error: target triple {triple!r} in {CI_DEFAULTS_YAML}:pull_request "
+                f"not found in {CI_TARGETS_YAML}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Validate that each build option listed is valid for the target.
+        all_options = set(get_all_build_options(ci_config, triple))
+        for option in pull_request_defaults["targets"][triple]["build_options"]:
+            if option not in all_options:
+                print(
+                    f"error: build option {option!r} for {triple} in "
+                    f"{CI_DEFAULTS_YAML}:pull_request not found in {CI_TARGETS_YAML} "
+                    f"(valid: {sorted(all_options)})",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+    # Validate that the default python version exists in ci-targets.yaml.
+    default_version = pull_request_defaults["python_version"]
+    for triple in pull_request_defaults["targets"]:
+        platform = find_target_platform(ci_config, triple)
+        ci_versions = ci_config[platform][triple]["python_versions"]
+        if default_version not in ci_versions:
+            print(
+                f"error: python version {default_version!r} in "
+                f"{CI_DEFAULTS_YAML}:pull_request not available for {triple} in "
+                f"{CI_TARGETS_YAML} (valid: {ci_versions})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate a JSON matrix for building distributions in CI"
@@ -344,7 +523,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--labels",
-        help="Comma-separated list of labels to filter by (e.g., 'platform:darwin,python:3.13,build:debug'), all must match.",
+        help="Comma-separated list of labels to filter by (e.g., 'platform:linux,python:3.13')",
+    )
+    parser.add_argument(
+        "--event",
+        choices=["pull_request", "push"],
+        help="The GitHub event type. When 'pull_request', uses ci-defaults.yaml for the default subset.",
     )
     parser.add_argument(
         "--free-runners",
@@ -370,10 +554,13 @@ def main() -> None:
     labels = parse_labels(args.labels)
 
     with open(CI_TARGETS_YAML) as f:
-        config = yaml.safe_load(f)
+        ci_config = yaml.safe_load(f)
 
     with open(CI_RUNNERS_YAML) as f:
         runners = yaml.safe_load(f)
+
+    with open(CI_DEFAULTS_YAML) as f:
+        ci_defaults = yaml.safe_load(f) or {}
 
     # If only free runners are allowed, reduce to a subset
     if args.free_runners:
@@ -383,16 +570,48 @@ def main() -> None:
             if runner_config.get("free")
         }
 
+    # Check for skip directive
+    if labels.get("directives") and "skip" in labels["directives"]:
+        # Emit empty matrices
+        result = {}
+        if args.matrix_type in ["python-build", "all"]:
+            if args.max_shards:
+                result["python-build"] = {
+                    str(i): {"include": []} for i in range(args.max_shards)
+                }
+            else:
+                result["python-build"] = {"include": []}
+        if args.matrix_type in ["docker-build", "all"]:
+            result["docker-build"] = {"include": []}
+        if args.matrix_type in ["crate-build", "all"]:
+            result["crate-build"] = {"include": []}
+        print(json.dumps(result))
+        return
+
+    event_defaults = ci_defaults.get(args.event) if args.event else None
+    if "all-targets" in labels.get("directives", set()):
+        event_defaults = None
+
+    allowed_triples = None
+    if event_defaults is not None:
+        validate_pull_request_defaults(ci_config, event_defaults)
+        allowed_triples = expand_default_triples(ci_config, event_defaults, labels)
+
     result = {}
 
-    # Generate python build entries
+    # Generate all python build entries, then filter
     python_entries = generate_python_build_matrix_entries(
-        config,
+        ci_config,
         runners,
         args.platform,
         labels,
         args.free_runners,
     )
+    python_entries = [
+        entry
+        for entry in python_entries
+        if should_include_entry(entry, labels, event_defaults, allowed_triples)
+    ]
 
     # Output python-build matrix if requested
     if args.matrix_type in ["python-build", "all"]:
@@ -420,18 +639,19 @@ def main() -> None:
             result["python-build"] = {"include": python_entries}
 
     # Generate docker-build matrix if requested
-    # Only include docker builds if there are Linux python builds
+    # Only include docker builds if there are Linux python builds.
     if args.matrix_type in ["docker-build", "all"]:
-        # Check if we have any Linux python builds
+        # Check if we have any Linux python builds.
         has_linux_builds = any(
             entry.get("platform") == "linux" for entry in python_entries
         )
 
-        # If no platform filter or explicitly requesting docker-build only, include docker builds
-        # Otherwise, only include if there are Linux python builds
+        # If no platform filter or explicitly requesting docker-build only, include docker builds.
+        # Otherwise, only include if there are Linux python builds.
         if args.matrix_type == "docker-build" or has_linux_builds:
             docker_entries = generate_docker_matrix_entries(
                 runners,
+                python_entries,
                 args.platform,
                 args.free_runners,
             )
@@ -442,7 +662,7 @@ def main() -> None:
         crate_entries = generate_crate_build_matrix_entries(
             python_entries,
             runners,
-            config,
+            ci_config,  # Use the full target config so --force-crate-build adds all native crate builds.
             args.force_crate_build,
             args.platform,
             args.free_runners,

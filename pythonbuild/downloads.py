@@ -84,10 +84,10 @@ DOWNLOADS = {
         "python_tag": "cp313",
     },
     "cpython-3.14": {
-        "url": "https://www.python.org/ftp/python/3.14.4/Python-3.14.4.tar.xz",
-        "size": 23855332,
-        "sha256": "d923c51303e38e249136fc1bdf3568d56ecb03214efdef48516176d3d7faaef8",
-        "version": "3.14.4",
+        "url": "https://www.python.org/ftp/python/3.14.5/Python-3.14.5rc1.tar.xz",
+        "size": 23894408,
+        "sha256": "67ee56f36fc22e5ada84d452430362e71081804c4f85c33dc5bf4206c27f973c",
+        "version": "3.14.5rc1",
         "licenses": ["Python-2.0", "CNRI-Python"],
         "license_file": "LICENSE.cpython.txt",
         "python_tag": "cp314",
@@ -279,10 +279,10 @@ DOWNLOADS = {
         "version": "0.13.1",
     },
     "pip": {
-        "url": "https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl",
-        "size": 1787723,
-        "sha256": "bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b",
-        "version": "26.0.1",
+        "url": "https://files.pythonhosted.org/packages/70/7a/be4bd8bcbb24ea475856dd68159d78b03b2bb53dae369f69c9606b8888f5/pip-26.1-py3-none-any.whl",
+        "size": 1812804,
+        "sha256": "4e8486d821d814b77319acb7b9e8bf5a4ee7590a643e7cb21029f209be8573c1",
+        "version": "26.1",
     },
     "readline": {
         # Mirrored from https://ftp.gnu.org/gnu/readline/readline-8.2.tar.gz
