@@ -296,6 +296,58 @@ def find_vcvarsall_path(msvc_version):
     )
 
 
+<<<<<<< HEAD
+=======
+class NoSearchStringError(Exception):
+    """Represents a missing search string when replacing content in a file."""
+
+
+def static_replace_in_file(p: pathlib.Path, search, replace):
+    """Replace occurrences of a string in a file.
+
+    The updated file contents are written out in place.
+    """
+
+    with p.open("rb") as fh:
+        data = fh.read()
+
+    # Build should be as deterministic as possible. Assert that wanted changes
+    # actually occur.
+    if search not in data:
+        raise NoSearchStringError("search string (%s) not in %s" % (search, p))
+
+    log("replacing `%s` with `%s` in %s" % (search, replace, p))
+    data = data.replace(search, replace)
+
+    with p.open("wb") as fh:
+        fh.write(data)
+
+
+def apply_source_patch(cpython_source_path: pathlib.Path, patch_path: pathlib.Path):
+    with patch_path.open("rb") as fh:
+        patch = fh.read().replace(b"\r\n", b"\n")
+
+    with tempfile.NamedTemporaryFile("wb", delete=False) as fh:
+        fh.write(patch)
+        normalized_patch = pathlib.Path(fh.name)
+
+    try:
+        subprocess.run(
+            [
+                "git.exe",
+                "-C",
+                str(cpython_source_path),
+                "apply",
+                "--whitespace=nowarn",
+                str(normalized_patch),
+            ],
+            check=True,
+        )
+    finally:
+        normalized_patch.unlink()
+
+
+>>>>>>> refs/tags/20260510
 OPENSSL_PROPS_REMOVE_RULES_LEGACY = b"""
   <ItemGroup>
     <_SSLDLL Include="$(opensslOutDir)\libcrypto$(_DLLSuffix).dll" />
@@ -1274,20 +1326,23 @@ def collect_python_build_artifacts(
     pcbuild_path: pathlib.Path,
     out_dir: pathlib.Path,
     python_majmin: str,
-    arch: str,
+    pcbuild_directory: str,
     config: str,
     openssl_entry: str,
     zlib_entry: str,
     freethreaded: bool,
 ):
     """Collect build artifacts from Python.
-
     Copies them into an output directory and returns a data structure describing
     the files.
     """
-    outputs_path = pcbuild_path / arch
+    arch = pcbuild_directory
+    # Python 3.15 suffixes the directory with 't' for free-threading
+    if arch.endswith("t"):
+        arch = arch.removesuffix("t")
+    outputs_path = pcbuild_path / pcbuild_directory
     intermediates_path = (
-        pcbuild_path / "obj" / ("%s%s_%s" % (python_majmin, arch, config))
+        pcbuild_path / "obj" / ("%s%s_%s" % (python_majmin, pcbuild_directory, config))
     )
 
     if not outputs_path.exists():
@@ -1339,6 +1394,11 @@ def collect_python_build_artifacts(
     }
 
     other_projects = {"pythoncore"}
+<<<<<<< HEAD
+=======
+    other_projects.add("python3dll")
+    other_projects.add("python3tdll")
+>>>>>>> refs/tags/20260510
 
     # Projects providing dependencies.
     depends_projects = set()
@@ -1625,6 +1685,11 @@ def build_cpython(
         python_exe = "python.exe"
         pythonw_exe = "pythonw.exe"
 
+    # Python 3.15 uses the default name for the executable in a suffixed directory
+    instrumented_python_exe = python_exe
+    if meets_python_minimum_version(python_version, "3.15") and freethreaded:
+        instrumented_python_exe = "python.exe"
+
     if arch == "amd64":
         build_platform = "x64"
         build_directory = "amd64"
@@ -1636,6 +1701,12 @@ def build_cpython(
         build_directory = "arm64"
     else:
         raise Exception("unhandled architecture: %s" % arch)
+
+    pcbuild_directory = build_directory
+    # Starting with 3.15, free-threaded CPython outputs use a `t` suffix.
+    # The third-party dependency archives still use the base architecture name.
+    if freethreaded and meets_python_minimum_version(python_version, "3.15"):
+        pcbuild_directory = f"{build_directory}t"
 
     tempdir_opts = (
         {"ignore_cleanup_errors": True} if sys.version_info >= (3, 12) else {}
@@ -1690,6 +1761,12 @@ def build_cpython(
 
         cpython_source_path = td / ("Python-%s" % python_version)
         pcbuild_path = cpython_source_path / "PCbuild"
+
+        if python_version.startswith("3.15."):
+            apply_source_patch(
+                cpython_source_path,
+                SUPPORT / "patch-site-reentrant-startup-files-3.15.patch",
+            )
 
         out_dir = td / "out"
 
@@ -1761,7 +1838,10 @@ def build_cpython(
             # test execution. We work around this by invoking the test harness
             # separately for each test.
             instrumented_python = (
-                pcbuild_path / build_directory / "instrumented" / python_exe
+                pcbuild_path
+                / pcbuild_directory
+                / "instrumented"
+                / instrumented_python_exe
             )
 
             tests = subprocess.run(
@@ -1870,7 +1950,7 @@ def build_cpython(
             "--source",
             str(cpython_source_path),
             "--build",
-            str(pcbuild_path / build_directory),
+            str(pcbuild_path / pcbuild_directory),
             "--copy",
             str(install_dir),
             "--temp",
@@ -1914,7 +1994,7 @@ def build_cpython(
             pcbuild_path,
             out_dir / "python",
             "".join(entry["version"].split(".")[0:2]),
-            build_directory,
+            pcbuild_directory,
             artifact_config,
             openssl_entry=openssl_entry,
             zlib_entry=zlib_entry,
