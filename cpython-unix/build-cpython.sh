@@ -154,12 +154,15 @@ else
     patch -p1 -i "${ROOT}/patch-macos-link-extension-modules.patch"
 fi
 
+<<<<<<< HEAD
 # Also on macOS, the `python` executable is linked against libraries defined by statically
 # linked modules. But those libraries should only get linked into libpython, not the
 # executable. This behavior is kinda suspect on all platforms, as it could be adding
 # library dependencies that shouldn't need to be there.
 # PYSTANDALONE: skip this patch.
 
+=======
+>>>>>>> refs/tags/20260510
 # The macOS code for sniffing for _dyld_shared_cache_contains_path falls back on a
 # possibly inappropriate code path if a configure time check fails. This is not
 # appropriate for certain cross-compiling scenarios. See discussion at
@@ -351,6 +354,12 @@ if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_15}" ]; then
     patch -p1 -i "${ROOT}/patch-testinternalcapi-interpreter-extern.patch"
 fi
 
+# Apply https://github.com/python/cpython/pull/149516 for a 3.15.0b1
+# site startup regression.
+if [ "${PYTHON_MAJMIN_VERSION}" = "3.15" ]; then
+    patch -p1 -i "${ROOT}/patch-site-reentrant-startup-files-3.15.patch"
+fi
+
 # Most bits look at CFLAGS. But setup.py only looks at CPPFLAGS.
 # So we need to set both.
 CFLAGS="${EXTRA_TARGET_CFLAGS} -fPIC -I${TOOLS_PATH}/deps/include -I${TOOLS_PATH}/deps/include/ncursesw"
@@ -438,19 +447,15 @@ CONFIGURE_FLAGS="
 
 # Build a libpython3.x.so, but statically link the interpreter against
 # libpython.
-#
-# For now skip this on macos, because it causes some linker failures. Note that
-# this patch mildly conflicts with the macos-only patch-python-link-modules
-# applied above, so you will need to resolve that conflict if you re-enable
-# this for macos.
-if [[ "${PYBUILD_PLATFORM}" != macos* ]]; then
+# Merged upstream in Python 3.15, https://github.com/python/cpython/pull/133313
+if [ -n "${PYTHON_MEETS_MAXIMUM_VERSION_3_14}" ]; then
     if [ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_12}" ]; then
         patch -p1 -i "${ROOT}/patch-python-configure-add-enable-static-libpython-for-interpreter.patch"
     else
         patch -p1 -i "${ROOT}/patch-python-configure-add-enable-static-libpython-for-interpreter-${PYTHON_MAJMIN_VERSION}.patch"
     fi
-    CONFIGURE_FLAGS="${CONFIGURE_FLAGS} --enable-static-libpython-for-interpreter"
 fi
+CONFIGURE_FLAGS="${CONFIGURE_FLAGS} --enable-static-libpython-for-interpreter"
 
 if [ "${CC}" = "musl-clang" ]; then
     # In order to build the _blake2 extension module with SSE3+ instructions, we need
@@ -629,12 +634,6 @@ PROFILE_TASK="${PROFILE_TASK} --ignore test_cmath test_decimal test_sqlite3 test
 # Linux, so we ignore it. See https://github.com/python/cpython/issues/128104
 if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" && -n "${CROSS_COMPILING}" && "${PYBUILD_PLATFORM}" != macos* ]]; then
     PROFILE_TASK="${PROFILE_TASK} --ignore test_strftime_y2k"
-fi
-
-# On 3.14+ `test_json.test_recursion.TestCRecursion.test_highly_nested_objects_decoding` fails during
-# PGO due to RecursionError not being raised as expected. See https://github.com/python/cpython/issues/140125
-if [[ -n "${PYTHON_MEETS_MINIMUM_VERSION_3_14}" ]]; then
-    PROFILE_TASK="${PROFILE_TASK} --ignore test_json"
 fi
 
 # PGO optimized / BOLT instrumented binaries segfault in a test_bytes test. Skip it.
@@ -1375,6 +1374,13 @@ if [ -d "${TOOLS_PATH}/deps/lib/tcl9" ]; then
         fi
     )
 fi
+
+# Prune the tk demos which are > 1 MB and not used
+rm -rf "${ROOT}/out/python/install/lib/tk9.0/demos"
+
+# Prune the tcl/tk translations
+rm -rf "${ROOT}/out/python/install/lib/tcl9.0/msgs"
+rm -rf "${ROOT}/out/python/install/lib/tk9.0/msgs"
 
 # Copy the terminfo database if present.
 if [ -d "${TOOLS_PATH}/deps/usr/share/terminfo" ]; then

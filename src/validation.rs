@@ -110,6 +110,7 @@ const PE_ALLOWED_LIBRARIES: &[&str] = &[
     "WINMM.dll",
     "WS2_32.dll",
     // Our libraries.
+<<<<<<< HEAD
     // "libcrypto-1_1.dll",
     // "libcrypto-1_1-x64.dll",
     // "libcrypto-3.dll",
@@ -135,6 +136,34 @@ const PE_ALLOWED_LIBRARIES: &[&str] = &[
     // "sqlite3.dll",
     // "tcl86t.dll",
     // "tk86t.dll",
+=======
+    "libcrypto-1_1.dll",
+    "libcrypto-1_1-x64.dll",
+    "libcrypto-3.dll",
+    "libcrypto-3-arm64.dll",
+    "libcrypto-3-x64.dll",
+    "libffi-8.dll",
+    "libssl-1_1.dll",
+    "libssl-1_1-x64.dll",
+    "libssl-3.dll",
+    "libssl-3-arm64.dll",
+    "libssl-3-x64.dll",
+    "python3.dll",
+    "python3t.dll",
+    "python39.dll",
+    "python310.dll",
+    "python311.dll",
+    "python312.dll",
+    "python313.dll",
+    "python313t.dll",
+    "python314.dll",
+    "python314t.dll",
+    "python315.dll",
+    "python315t.dll",
+    "sqlite3.dll",
+    "tcl86t.dll",
+    "tk86t.dll",
+>>>>>>> refs/tags/20260510
 ];
 
 // CPython 3.14 and ARM64 use a newer version of tcl/tk (8.6.14+) which includes a bundled zlib that
@@ -255,6 +284,7 @@ static ELF_ALLOWED_LIBRARIES_BY_TRIPLE: Lazy<HashMap<&'static str, Vec<&'static 
                 "armv7-unknown-linux-gnueabihf",
                 vec!["ld-linux-armhf.so.3", "libgcc_s.so.1"],
             ),
+            ("aarch64-unknown-linux-gnu", vec!["libgcc_s.so.1"]),
             ("i686-unknown-linux-gnu", vec!["ld-linux-x86-64.so.2"]),
             ("mips-unknown-linux-gnu", vec!["ld.so.1", "libatomic.so.1"]),
             (
@@ -268,10 +298,22 @@ static ELF_ALLOWED_LIBRARIES_BY_TRIPLE: Lazy<HashMap<&'static str, Vec<&'static 
                 vec!["ld-linux-riscv64-lp64d.so.1", "libatomic.so.1"],
             ),
             ("s390x-unknown-linux-gnu", vec!["ld64.so.1"]),
-            ("x86_64-unknown-linux-gnu", vec!["ld-linux-x86-64.so.2"]),
-            ("x86_64_v2-unknown-linux-gnu", vec!["ld-linux-x86-64.so.2"]),
-            ("x86_64_v3-unknown-linux-gnu", vec!["ld-linux-x86-64.so.2"]),
-            ("x86_64_v4-unknown-linux-gnu", vec!["ld-linux-x86-64.so.2"]),
+            (
+                "x86_64-unknown-linux-gnu",
+                vec!["ld-linux-x86-64.so.2", "libgcc_s.so.1"],
+            ),
+            (
+                "x86_64_v2-unknown-linux-gnu",
+                vec!["ld-linux-x86-64.so.2", "libgcc_s.so.1"],
+            ),
+            (
+                "x86_64_v3-unknown-linux-gnu",
+                vec!["ld-linux-x86-64.so.2", "libgcc_s.so.1"],
+            ),
+            (
+                "x86_64_v4-unknown-linux-gnu",
+                vec!["ld-linux-x86-64.so.2", "libgcc_s.so.1"],
+            ),
         ]
         .iter()
         .cloned()
